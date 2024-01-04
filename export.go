@@ -27,6 +27,18 @@ typedef struct {
 	double sigma;
 } Params;
 
+// ParametersLiteral
+typedef struct {
+	Luint64 qi;
+	Luint64 pi;
+
+    int logN;
+	int logSlots;
+
+	double scale;
+	double sigma;
+} ParametersLiteral;
+
 // Poly
 typedef struct {
 	Luint64* coeffs;
@@ -185,8 +197,11 @@ func genServerParams(user_idx *C.int) *C.MPHEServer {
 		}
 	)
 
-	defaultParam := []ckks.ParametersLiteral{PN14QP439}
-	ckksParams, err := ckks.NewParametersFromLiteral(defaultParam[0]) // hardcoded, assuming using one parameters lietral
+	// defaultParam := []ckks.ParametersLiteral{PN14QP439}
+	PARAMSLITERAL := []ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	server.paramsliteral = *&convParamsLiteral(&PARAMSLITERAL)
+
+	ckksParams, err := ckks.NewParametersFromLiteral(PARAMSLITERAL)
 	if ckksParams.PCount() < 2 {
 		fmt.Printf("ckks Params.PCount < 2")
 		// continue
@@ -198,7 +213,7 @@ func genServerParams(user_idx *C.int) *C.MPHEServer {
 
 	PARAMS := mkckks.NewParameters(ckksParams)
 
-	server.params = *convParams(&PARAMS)
+	// server.params = *convParams(&PARAMS)
 
 	kgen := mkckks.NewKeyGenerator(PARAMS)
 
@@ -541,6 +556,28 @@ func newTestVectors(testContext *testParams, id string, a, b complex128) (msg *m
 }
 
 /* HELPER: Conversion between C and Go structs */
+// *ckks.ParametersLiteral --> *C.ParametersLiteral
+func convParamsLiteral(p *ckks.ParametersLiteral) *C.ParametersLiteral {
+	params_literal := (*C.ParametersLiteral)(C.malloc(C.sizeof_ParametersLiteral))
+
+	// Populate struct
+	qi := make([]uint64, len(p.Q))
+	copy(qi, p.Q)
+	params_literal.qi = convLuint64(qi)
+
+	pi := make([]uint64, len(p.P))
+	copy(pi, p.P)
+	params_literal.pi = convLuint64(pi)
+
+	params_literal.logN = C.int(p.LogN)
+	params_literal.logSlots = C.int(p.LogSlots)
+
+	params_literal.scale = C.double(p.Scale)
+	params_literal.sigma = C.double(p.Sigma)
+
+	return params_literal
+}
+
 // *mkckks.Parameters --> *C.Params
 func convParams(p *mkckks.Parameters) *C.Params {
 	params := (*C.Params)(C.malloc(C.sizeof_Params))
@@ -564,26 +601,6 @@ func convParams(p *mkckks.Parameters) *C.Params {
 	return params
 }
 
-/// Luint64
-
-// []uint64 --> Luint64
-func convLuint64(vals []uint64) C.Luint64 {
-	list := (*C.Luint64)(C.malloc(C.sizeof_Luint64))
-
-	list.data = (*C.ulonglong)(&vals[0])
-	list.size = C.size_t(len(vals))
-
-	return *list
-}
-
-// Luint64 --> []uint64
-func convSuint64(list C.Luint64) []uint64 {
-	size := int(list.size)
-	vals := (*[1 << 30]uint64)(unsafe.Pointer(list.data))[:size:size]
-
-	return vals
-}
-
 // *C.Params --> *ckks.Parameters
 func convCKKSParams(params *C.Params) *ckks.Parameters {
 	// Create Moduli struct wrapping slices qi, pi
@@ -605,6 +622,26 @@ func convCKKSParams(params *C.Params) *ckks.Parameters {
 	p.SetSigma(float64(params.sigma))
 
 	return p
+}
+
+/// Luint64
+
+// []uint64 --> Luint64
+func convLuint64(vals []uint64) C.Luint64 {
+	list := (*C.Luint64)(C.malloc(C.sizeof_Luint64))
+
+	list.data = (*C.ulonglong)(&vals[0])
+	list.size = C.size_t(len(vals))
+
+	return *list
+}
+
+// Luint64 --> []uint64
+func convSuint64(list C.Luint64) []uint64 {
+	size := int(list.size)
+	vals := (*[1 << 30]uint64)(unsafe.Pointer(list.data))[:size:size]
+
+	return vals
 }
 
 /// Poly
