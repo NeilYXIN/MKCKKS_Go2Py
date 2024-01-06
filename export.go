@@ -3,7 +3,7 @@ package main
 /*
 #include <stdbool.h>
 #include <stddef.h>
-#include <stdlib.h>
+#include <complex.h>
 
 typedef struct {
 	double* data;
@@ -15,11 +15,11 @@ typedef struct {
 	size_t size;
 } Luint64;
 
-// // Message
-// typedef struct {
-// 	complex128* data;
-// 	size_t size;
-// } Message;
+// Message
+typedef struct {
+	double complex* data;
+	size_t size;
+} Message;
 
 // Params
 typedef struct {
@@ -232,9 +232,9 @@ func genServerParams(user_idx C.int) *C.MPHEServer {
 	// testContext.cjkSet = mkrlwe.NewConjugationKeySet()
 
 	// gen sk, pk, rlk, rk
-	server.idx = user_idx
+	server.idx = user_idx // user_idx is C.int
 	// user_id := "user" + strconv.Itoa(int(server.idx))
-	user_id := strconv.Itoa(int(server.idx))
+	user_id := strconv.Itoa(int(server.idx)) // C.int -> go int -> go string
 	fmt.Printf(user_id)
 
 	sk, pk := kgen.GenKeyPair(user_id)
@@ -503,6 +503,32 @@ func convParamsLiteral(p *ckks.ParametersLiteral) *C.ParametersLiteral {
 // 	return p
 // }
 
+/// Message
+
+// mkckks.Message --> C.Message
+func convMessage(msg mkckks.Message) C.Message {
+	list := (*C.Message)(C.malloc(C.sizeof_Message))
+
+	// for i, comp_val := range msg.Value {
+	// 	list.data
+
+	// }
+
+	list.data = (*C.complexdouble)(&msg.Value[0])
+	list.size = C.size_t(len(msg.Value))
+
+	return *list
+}
+
+// C.Message --> []complex128
+func convMKCKKSMessage(list C.Message) *mkckks.Message {
+	ret := new(mkckks.Message)
+	size := int(list.size)
+	vals := (*[1 << 30]complex128)(unsafe.Pointer(list.data))[:size:size]
+	ret.Value = vals
+	return ret
+}
+
 /// Luint64
 
 // []uint64 --> Luint64
@@ -755,52 +781,51 @@ func convMKRLWECiphertext(c *C.Ciphertext) *mkrlwe.Ciphertext {
 // 	return cc
 // }
 
-/// Data
+// /// Data
+// // []*ckks.Ciphertext --> *C.Data
+// func convData(sct []*mkrlwe.Ciphertext) *C.Data {
+// 	data := (*C.Data)(C.malloc(C.sizeof_Data))
 
-// []*ckks.Ciphertext --> *C.Data
-func convData(sct []*mkrlwe.Ciphertext) *C.Data {
-	data := (*C.Data)(C.malloc(C.sizeof_Data))
+// 	// Retrieve pointer to slice
+// 	ciphertexts := make([]C.Ciphertext, len(sct))
+// 	for i, ct := range sct {
+// 		ciphertexts[i] = *convCiphertext(ct)
+// 	}
 
-	// Retrieve pointer to slice
-	ciphertexts := make([]C.Ciphertext, len(sct))
-	for i, ct := range sct {
-		ciphertexts[i] = *convCiphertext(ct)
-	}
+// 	data.data = (*C.Ciphertext)(&ciphertexts[0])
+// 	data.size = C.size_t(len(sct))
 
-	data.data = (*C.Ciphertext)(&ciphertexts[0])
-	data.size = C.size_t(len(sct))
+// 	return data
+// }
 
-	return data
-}
+// // *C.Data --> []*ckks.Ciphertext
+// func convSckksCiphertext(data *C.Data) []*mkrlwe.Ciphertext {
+// 	size := int(data.size)
+// 	cts := (*[1 << 30]C.Ciphertext)(unsafe.Pointer(data.data))[:size:size]
 
-// *C.Data --> []*ckks.Ciphertext
-func convSckksCiphertext(data *C.Data) []*mkrlwe.Ciphertext {
-	size := int(data.size)
-	cts := (*[1 << 30]C.Ciphertext)(unsafe.Pointer(data.data))[:size:size]
+// 	// Extract []*ckks.Ciphertext from []C.Ciphertext
+// 	cct := make([]*ckks.Ciphertext, size)
+// 	for i, ciphertext := range cts {
+// 		c := convMKRLWECiphertext(&ciphertext)
+// 		cct[i] = c
+// 	}
 
-	// Extract []*ckks.Ciphertext from []C.Ciphertext
-	cct := make([]*ckks.Ciphertext, size)
-	for i, ciphertext := range cts {
-		c := convMKRLWECiphertext(&ciphertext)
-		cct[i] = c
-	}
+// 	return cct
+// }
 
-	return cct
-}
+// // (*C.Data, C.size_t) --> [][]*ckks.Ciphertext
+// func convSSckksCiphertext(datas *C.Data, datasSize C.size_t) [][]*ckks.Ciphertext {
+// 	size := int(datasSize)
+// 	data := (*[1 << 30]C.Data)(unsafe.Pointer(datas))[:size:size]
 
-// (*C.Data, C.size_t) --> [][]*ckks.Ciphertext
-func convSSckksCiphertext(datas *C.Data, datasSize C.size_t) [][]*ckks.Ciphertext {
-	size := int(datasSize)
-	data := (*[1 << 30]C.Data)(unsafe.Pointer(datas))[:size:size]
+// 	// Extract [][]*ckks from []C.Data
+// 	ccts := make([][]*ckks.Ciphertext, size)
+// 	for i, ct := range data {
+// 		ccts[i] = convSckksCiphertext(&ct)
+// 	}
 
-	// Extract [][]*ckks from []C.Data
-	ccts := make([][]*ckks.Ciphertext, size)
-	for i, ct := range data {
-		ccts[i] = convSckksCiphertext(&ct)
-	}
-
-	return ccts
-}
+// 	return ccts
+// }
 
 /// Share
 
