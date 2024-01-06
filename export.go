@@ -14,6 +14,12 @@ typedef struct {
 	size_t size;
 } Luint64;
 
+// Message
+typedef struct {
+	complex128* data;
+	size_t size;
+} Message;
+
 // Params
 typedef struct {
 	Luint64 qi;
