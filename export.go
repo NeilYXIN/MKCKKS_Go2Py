@@ -15,11 +15,11 @@ typedef struct {
 	size_t size;
 } Luint64;
 
-// Message
-typedef struct {
-	complex128* data;
-	size_t size;
-} Message;
+// // Message
+// typedef struct {
+// 	complex128* data;
+// 	size_t size;
+// } Message;
 
 // Params
 typedef struct {
@@ -82,9 +82,10 @@ typedef struct {
 typedef struct {
 	Poly* value;
 	size_t size;
+	int idx;
 
-	double scale;
-	bool isNTT;
+	// double scale;
+	// bool isNTT;
 } Ciphertext;
 
 // Data
@@ -95,10 +96,11 @@ typedef struct {
 
 // MPHEServer
 typedef struct {
-	Params params;
+	// Params params;
+	ParametersLiteral paramsLiteral;
 	Poly crs;
-	Poly sk;
-	Poly pk;
+	PolyQP sk;
+	PolyQPPair pk;
 	Data data;
 	int idx;
 } MPHEServer;
@@ -112,7 +114,6 @@ typedef struct {
 	Poly decryptionKey;
 } MPHEClient;
 */
-
 import "C"
 import (
 	"flag"
@@ -120,7 +121,6 @@ import (
 	"mk-lattigo/mkckks"
 	"mk-lattigo/mkrlwe"
 	"strconv"
-
 	"unsafe"
 
 	"github.com/ldsec/lattigo/v2/ckks"
@@ -149,15 +149,15 @@ type testParam struct {
 	// cjkSet *mkrlwe.ConjugationKeySet
 	id string
 
-	// encryptor *mkckks.Encryptor
-	// decryptor *mkckks.Decryptor
-	// evaluator *mkckks.Evaluator
+	encryptor *mkckks.Encryptor
+	decryptor *mkckks.Decryptor
+	evaluator *mkckks.Evaluator
 	// idset     *mkrlwe.IDSet
 }
 
 var N = 2
 
-func genServerParams(user_idx *C.int) *C.MPHEServer {
+func genServerParams(user_idx C.int) *C.MPHEServer {
 	server := (*C.MPHEServer)(C.malloc(C.sizeof_MPHEServer))
 
 	// func genTestContext(user_id int) *testParams {
@@ -205,10 +205,10 @@ func genServerParams(user_idx *C.int) *C.MPHEServer {
 	)
 
 	// defaultParam := []ckks.ParametersLiteral{PN14QP439}
-	PARAMSLITERAL := []ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
-	server.paramsliteral = *&convParamsLiteral(&PARAMSLITERAL)
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
 
-	ckksParams, err := ckks.NewParametersFromLiteral(PARAMSLITERAL)
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
 	if ckksParams.PCount() < 2 {
 		fmt.Printf("ckks Params.PCount < 2")
 		// continue
@@ -233,7 +233,8 @@ func genServerParams(user_idx *C.int) *C.MPHEServer {
 
 	// gen sk, pk, rlk, rk
 	server.idx = user_idx
-	user_id := "user" + server.idx
+	// user_id := "user" + strconv.Itoa(int(server.idx))
+	user_id := strconv.Itoa(int(server.idx))
 	fmt.Printf(user_id)
 
 	sk, pk := kgen.GenKeyPair(user_id)
@@ -241,7 +242,7 @@ func genServerParams(user_idx *C.int) *C.MPHEServer {
 	server.pk = *convPolyQPPair(pk.PublicKey.Value)
 
 	r := kgen.GenSecretKey(user_id)
-	rlk := kgen.GenRelinearizationKey(server.sk, r)
+	rlk := kgen.GenRelinearizationKey(sk, r)
 	// server.rlk = // TODO: rlk
 
 	// userList := make([]string, maxUsers)
@@ -389,17 +390,17 @@ func main() {
 			userList[i] = "user" + strconv.Itoa(i)
 			idset.Add(userList[i])
 		}
-
-		var testContext *testParams
-		if testContext, err = genTestParams(params, idset); err != nil {
+		user_id := "user" + strconv.Itoa(1)
+		var testContext *testParam
+		if testContext, err = genTestParam(params, user_id); err != nil {
 			panic(err)
 		}
 
-		for numUsers := 2; numUsers <= *maxUsers; numUsers *= 2 {
-			benchMulAndRelin(testContext, userList[:numUsers])
-			//benchMulAndRelinHoisted(testContext, userList[:numUsers], b)
-			//benchSquareHoisted(testContext, userList[:numUsers], b)
-		}
+		// for numUsers := 2; numUsers <= *maxUsers; numUsers *= 2 {
+		// 	// benchMulAndRelin(testContext, userList[:numUsers])
+		// 	//benchMulAndRelinHoisted(testContext, userList[:numUsers], b)
+		// 	//benchSquareHoisted(testContext, userList[:numUsers], b)
+		// }
 
 		/*
 
@@ -412,137 +413,7 @@ func main() {
 	}
 }
 
-func benchMulAndRelin(testContext *testParams, userList []string) {
-
-	numUsers := len(userList)
-	msgList := make([]*mkckks.Message, numUsers)
-	ctList := make([]*mkckks.Ciphertext, numUsers)
-
-	rlkSet := testContext.rlkSet
-	eval := testContext.evaluator
-
-	for i := range userList {
-		msgList[i], ctList[i] = newTestVectors(testContext, userList[i], complex(-1, 1), complex(-1, 1))
-	}
-
-	ct0 := ctList[0]
-	ct1 := ctList[0]
-
-	for i := range userList {
-		ct0 = eval.AddNew(ct0, ctList[i])
-		ct1 = eval.SubNew(ct1, ctList[i])
-	}
-
-	// b.Run(GetTestName(testContext.params, "MKMulAndRelin: "+strconv.Itoa(numUsers)+"/ "), func() {
-	//     for i := 0; i < N; i++ {
-	//         eval.MulRelinNew(ct0, ct1, rlkSet)
-	//     }
-
-	// })
-	fmt.Println("MKMulAndRelin: " + strconv.Itoa(numUsers) + "/ ")
-	for i := 0; i < N; i++ {
-		eval.MulRelinNew(ct0, ct1, rlkSet)
-	}
-
-}
-
-func benchRotate(testContext *testParams, userList []string) {
-
-	numUsers := len(userList)
-	msgList := make([]*mkckks.Message, numUsers)
-	ctList := make([]*mkckks.Ciphertext, numUsers)
-
-	rtkSet := testContext.rtkSet
-	eval := testContext.evaluator
-
-	for i := range userList {
-		msgList[i], ctList[i] = newTestVectors(testContext, userList[i], complex(-1, 1), complex(-1, 1))
-	}
-
-	ct := ctList[0]
-
-	for i := range userList {
-		ct = eval.AddNew(ct, ctList[i])
-	}
-
-	for i := 0; i < N; i++ {
-		eval.RotateNew(ct, 2, rtkSet)
-	}
-
-}
-
-func benchMulAndRelinHoisted(testContext *testParams, userList []string) {
-
-	numUsers := len(userList)
-	msgList := make([]*mkckks.Message, numUsers)
-	ctList := make([]*mkckks.Ciphertext, numUsers)
-
-	rlkSet := testContext.rlkSet
-	eval := testContext.evaluator
-
-	for i := range userList {
-		msgList[i], ctList[i] = newTestVectors(testContext, userList[i], complex(-1, 1), complex(-1, 1))
-	}
-
-	ct0 := ctList[0]
-	ct1 := ctList[1]
-
-	for i := range userList {
-		ct0 = eval.AddNew(ct0, ctList[i])
-		ct1 = eval.SubNew(ct1, ctList[i])
-	}
-
-	// b.Run(GetTestName(testContext.params, "MKMulAndRelinHoisted: "+strconv.Itoa(numUsers)+"/ "), func() {
-	//     for i := 0; i < N; i++ {
-	//         ct0Hoisted := eval.HoistedForm(ct0)
-	//         ct1Hoisted := eval.HoistedForm(ct1)
-	//         eval.MulRelinHoistedNew(ct0, ct1, ct0Hoisted, ct1Hoisted, rlkSet)
-	//     }
-
-	// })
-
-	for i := 0; i < N; i++ {
-		ct0Hoisted := eval.HoistedForm(ct0)
-		ct1Hoisted := eval.HoistedForm(ct1)
-		eval.MulRelinHoistedNew(ct0, ct1, ct0Hoisted, ct1Hoisted, rlkSet)
-	}
-
-}
-
-func benchSquareHoisted(testContext *testParams, userList []string) {
-
-	numUsers := len(userList)
-	msgList := make([]*mkckks.Message, numUsers)
-	ctList := make([]*mkckks.Ciphertext, numUsers)
-
-	rlkSet := testContext.rlkSet
-	eval := testContext.evaluator
-
-	for i := range userList {
-		msgList[i], ctList[i] = newTestVectors(testContext, userList[i], complex(-1, 1), complex(-1, 1))
-	}
-
-	ct := ctList[0]
-
-	for i := range userList {
-		ct = eval.AddNew(ct, ctList[i])
-	}
-
-	// b.Run(GetTestName(testContext.params, "SquareHoisted: "+strconv.Itoa(numUsers)+"/ "), func() {
-	//     for i := 0; i < N; i++ {
-	//         ctHoisted := eval.HoistedForm(ct)
-	//         eval.MulRelinHoistedNew(ct, ct, ctHoisted, ctHoisted, rlkSet)
-	//     }
-
-	// })
-	for i := 0; i < N; i++ {
-		ctHoisted := eval.HoistedForm(ct)
-		eval.MulRelinHoistedNew(ct, ct, ctHoisted, ctHoisted, rlkSet)
-	}
-
-}
-
-func newTestVectors(testContext *testParams, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {
+func newTestVectors(testContext *testParam, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {
 
 	params := testContext.params
 	logSlots := testContext.params.LogSlots()
@@ -554,7 +425,8 @@ func newTestVectors(testContext *testParams, id string, a, b complex128) (msg *m
 	}
 
 	if testContext.encryptor != nil {
-		ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pkSet.GetPublicKey(id))
+		ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pk)
+		// ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pkSet.GetPublicKey(id))
 	} else {
 		panic("cannot newTestVectors: encryptor is not initialized!")
 	}
@@ -585,51 +457,51 @@ func convParamsLiteral(p *ckks.ParametersLiteral) *C.ParametersLiteral {
 	return params_literal
 }
 
-// *mkckks.Parameters --> *C.Params
-func convParams(p *mkckks.Parameters) *C.Params {
-	params := (*C.Params)(C.malloc(C.sizeof_Params))
+// // *mkckks.Parameters --> *C.Params
+// func convParams(p *mkckks.Parameters) *C.Params {
+// 	params := (*C.Params)(C.malloc(C.sizeof_Params))
 
-	// Populate struct
-	qi := make([]uint64, len(p.qi))
-	copy(qi, p.qi)
-	params.qi = convLuint64(qi)
+// 	// Populate struct
+// 	qi := make([]uint64, len(p.qi))
+// 	copy(qi, p.qi)
+// 	params.qi = convLuint64(qi)
 
-	pi := make([]uint64, len(p.pi))
-	copy(pi, p.pi)
-	params.pi = convLuint64(pi)
+// 	pi := make([]uint64, len(p.pi))
+// 	copy(pi, p.pi)
+// 	params.pi = convLuint64(pi)
 
-	params.logN = C.int(p.LogN())
-	params.logSlots = C.int(p.LogSlots())
-	params.gamma = C.int(2) // TODO: gamma = 2, hardcoded from mkrlwe.NewParameters()
+// 	params.logN = C.int(p.LogN())
+// 	params.logSlots = C.int(p.LogSlots())
+// 	params.gamma = C.int(2) // TODO: gamma = 2, hardcoded from mkrlwe.NewParameters()
 
-	params.scale = C.double(p.Scale())
-	params.sigma = C.double(p.Sigma())
+// 	params.scale = C.double(p.Scale())
+// 	params.sigma = C.double(p.Sigma())
 
-	return params
-}
+// 	return params
+// }
 
-// *C.Params --> *ckks.Parameters
-func convCKKSParams(params *C.Params) *ckks.Parameters {
-	// Create Moduli struct wrapping slices qi, pi
-	m := ckks.Moduli{
-		Qi: convSuint64(params.qi),
-		Pi: convSuint64(params.pi),
-	}
+// // *C.Params --> *ckks.Parameters
+// func convCKKSParams(params *C.Params) *ckks.Parameters {
+// 	// Create Moduli struct wrapping slices qi, pi
+// 	m := ckks.Moduli{
+// 		Qi: convSuint64(params.qi),
+// 		Pi: convSuint64(params.pi),
+// 	}
 
-	// Create and populate Params
-	p, err := ckks.NewParametersFromModuli(uint64(params.logN), &m)
+// 	// Create and populate Params
+// 	p, err := ckks.NewParametersFromModuli(uint64(params.logN), &m)
 
-	if err != nil {
-		fmt.Printf("C.Params built wrong: %v\n", err)
-		return nil
-	}
+// 	if err != nil {
+// 		fmt.Printf("C.Params built wrong: %v\n", err)
+// 		return nil
+// 	}
 
-	p.SetLogSlots(uint64(params.logSlots))
-	p.SetScale(float64(params.scale))
-	p.SetSigma(float64(params.sigma))
+// 	p.SetLogSlots(uint64(params.logSlots))
+// 	p.SetScale(float64(params.scale))
+// 	p.SetSigma(float64(params.sigma))
 
-	return p
-}
+// 	return p
+// }
 
 /// Luint64
 
@@ -671,7 +543,7 @@ func convPoly(r *ring.Poly) *C.Poly {
 	return p
 }
 
-// *ring.PolyQP --> *C.PolyQP
+// *rlwe.PolyQP --> *C.PolyQP
 func convPolyQP(r *rlwe.PolyQP) *C.PolyQP {
 	qp := (*C.PolyQP)(C.malloc(C.sizeof_PolyQP))
 
@@ -701,8 +573,8 @@ func convRingPolyQP(qp *C.PolyQP) *rlwe.PolyQP {
 
 	ret := new(rlwe.PolyQP)
 
-	ret.Q = *convPoly(qp.Q)
-	ret.P = *convPoly(qp.P)
+	ret.Q = convRingPoly(qp.Q)
+	ret.P = convRingPoly(qp.P)
 
 	return ret
 }
@@ -765,60 +637,128 @@ func convPolyQPPair(rpp [2]rlwe.PolyQP) *C.PolyQPPair {
 func convS2RingPolyQP(pp *C.PolyQPPair) [2]rlwe.PolyQP {
 	var rpp [2]rlwe.PolyQP
 
-	rpp[0] = *convRingPolyQP(&pp.p0)
-	rpp[1] = *convRingPolyQP(&pp.p1)
+	rpp[0] = *convRingPolyQP(&pp.qp0)
+	rpp[1] = *convRingPolyQP(&pp.qp1)
 
 	return rpp
 }
 
 /// Ciphertext
 
-// *ckks.Ciphertext --> *C.Ciphertext
-func convCiphertext(cc *ckks.Ciphertext) *C.Ciphertext {
+// *mkrlwe.Ciphertext --> *C.Ciphertext
+func convCiphertext(cc *mkrlwe.Ciphertext) *C.Ciphertext {
 	c := (*C.Ciphertext)(C.malloc(C.sizeof_Ciphertext))
 
 	// Retrieve each polynomial making up the Ciphertext
-	value := make([]C.Poly, len(cc.Element.Value()))
-	for i, val := range cc.Element.Value() {
-		value[i] = *convPoly(val)
+	value := make([]C.Poly, len(cc.Value))
+	if len(cc.Value) > 2 {
+		fmt.Printf("ERROR: mkrlwe.Ciphertext contains map length > 2!")
+	}
+	counter := 0
+	user_id := 0
+	for key, val := range cc.Value {
+		int_key, err := strconv.Atoi(key)
+		if int_key != 0 {
+			user_id = int_key
+			if counter == 0 {
+				fmt.Printf("ERROR: key with user_id was the first element in the map of mkrlwe.Ciphertext!")
+			}
+		}
+		if err != nil {
+			// ... handle error
+			fmt.Printf("ERROR: Key in the map of mkrlwe.Ciphertext not a valid integer!")
+			panic(err)
+		}
+		value[counter] = *convPoly(val)
+		counter = counter + 1
 	}
 
 	// Populate C.Ciphertext
 	c.value = (*C.Poly)(&value[0])
 	c.size = C.size_t(len(value))
-	c.scale = C.double(cc.Element.Scale())
-	c.isNTT = C.bool(cc.Element.IsNTT())
+	c.idx = (C.int)(user_id)
+	// c.scale = C.double(cc.scale)
+	// c.isNTT = C.bool(cc.Element.IsNTT())
 
 	return c
 }
 
-// *C.Ciphertext --> *ckks.Ciphertext
-func convCKKSCiphertext(c *C.Ciphertext) *ckks.Ciphertext {
+// // old
+// func convCiphertext(cc *ckks.Ciphertext) *C.Ciphertext {
+// 	c := (*C.Ciphertext)(C.malloc(C.sizeof_Ciphertext))
+
+// 	// Retrieve each polynomial making up the Ciphertext
+// 	value := make([]C.Poly, len(cc.Element.Value()))
+// 	for i, val := range cc.Element.Value() {
+// 		value[i] = *convPoly(val)
+// 	}
+
+// 	// Populate C.Ciphertext
+// 	c.value = (*C.Poly)(&value[0])
+// 	c.size = C.size_t(len(value))
+// 	c.scale = C.double(cc.Element.Scale())
+// 	c.isNTT = C.bool(cc.Element.IsNTT())
+
+// 	return c
+// }
+
+// *C.Ciphertext --> *mkrlwe.Ciphertext
+func convMKRLWECiphertext(c *C.Ciphertext) *mkrlwe.Ciphertext {
 	size := int(c.size)
 	list := (*[1 << 30]C.Poly)(unsafe.Pointer(c.value))[:size:size]
 
 	// Extract []*ringPoly from []C.Poly
-	value := make([]*ring.Poly, size)
-	for i, poly := range list {
+	// value := make([]*ring.Poly, size)
+	value := make(map[string]*ring.Poly)
+	for i, poly := range list { // TODO: i is key, might not be user_idx
 		v := convRingPoly(&poly)
-		value[i] = v
+		if i == 0 {
+			value["0"] = v
+		} else {
+			value[strconv.Itoa(int(c.idx))] = v
+		}
 	}
 
 	// Populate ckks.Ciphertext
-	cc := new(ckks.Ciphertext)
-	cc.Element = new(ckks.Element)
+	cc := new(mkrlwe.Ciphertext)
+	// cc.Value = make(map[string]*ring.Poly)
 
-	cc.Element.SetValue(value)
-	cc.Element.SetScale(float64(c.scale))
-	cc.Element.SetIsNTT(bool(c.isNTT))
+	cc.Value = value
+	// cc.SetValue(value)
+	// cc.Element.SetScale(float64(c.scale))
+	// cc.Element.SetIsNTT(bool(c.isNTT))
 
 	return cc
 }
 
+// // Old
+// // *C.Ciphertext --> *ckks.Ciphertext
+// func convCKKSCiphertext(c *C.Ciphertext) *ckks.Ciphertext {
+// 	size := int(c.size)
+// 	list := (*[1 << 30]C.Poly)(unsafe.Pointer(c.value))[:size:size]
+
+// 	// Extract []*ringPoly from []C.Poly
+// 	value := make([]*ring.Poly, size)
+// 	for i, poly := range list {
+// 		v := convRingPoly(&poly)
+// 		value[i] = v
+// 	}
+
+// 	// Populate ckks.Ciphertext
+// 	cc := new(ckks.Ciphertext)
+// 	cc.Element = new(ckks.Element)
+
+// 	cc.Element.SetValue(value)
+// 	cc.Element.SetScale(float64(c.scale))
+// 	cc.Element.SetIsNTT(bool(c.isNTT))
+
+// 	return cc
+// }
+
 /// Data
 
 // []*ckks.Ciphertext --> *C.Data
-func convData(sct []*ckks.Ciphertext) *C.Data {
+func convData(sct []*mkrlwe.Ciphertext) *C.Data {
 	data := (*C.Data)(C.malloc(C.sizeof_Data))
 
 	// Retrieve pointer to slice
@@ -834,14 +774,14 @@ func convData(sct []*ckks.Ciphertext) *C.Data {
 }
 
 // *C.Data --> []*ckks.Ciphertext
-func convSckksCiphertext(data *C.Data) []*ckks.Ciphertext {
+func convSckksCiphertext(data *C.Data) []*mkrlwe.Ciphertext {
 	size := int(data.size)
 	cts := (*[1 << 30]C.Ciphertext)(unsafe.Pointer(data.data))[:size:size]
 
 	// Extract []*ckks.Ciphertext from []C.Ciphertext
 	cct := make([]*ckks.Ciphertext, size)
 	for i, ciphertext := range cts {
-		c := convCKKSCiphertext(&ciphertext)
+		c := convMKRLWECiphertext(&ciphertext)
 		cct[i] = c
 	}
 
