@@ -3,6 +3,7 @@ package main
 /*
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 typedef struct {
 	double* data;
@@ -114,19 +115,19 @@ typedef struct {
 
 import "C"
 import (
-	"C"
 	"flag"
 	"fmt"
 	"mk-lattigo/mkckks"
 	"mk-lattigo/mkrlwe"
 	"strconv"
 
+	"unsafe"
+
 	"github.com/ldsec/lattigo/v2/ckks"
 	"github.com/ldsec/lattigo/v2/ring"
 	"github.com/ldsec/lattigo/v2/rlwe"
 	"github.com/ldsec/lattigo/v2/utils"
 )
-import "unsafe"
 
 type testParam struct {
 	params mkckks.Parameters
