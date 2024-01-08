@@ -84,7 +84,7 @@ typedef struct {
 	size_t size;
 	int idx;
 
-	// double scale;
+	double scale;
 	// bool isNTT;
 } Ciphertext;
 
@@ -156,8 +156,27 @@ type testParam struct {
 }
 
 var N = 2
+var PN14QP439 = ckks.ParametersLiteral{
+	LogN:     14,
+	LogSlots: 13,
+	Q: []uint64{
+		// 59 + 5x52
+		0x7ffffffffe70001,
 
-func genServerParams(user_idx C.int) *C.MPHEServer {
+		0xffffffff00001, 0xfffffffe40001,
+		0xfffffffe20001, 0xfffffffbe0001,
+		0xfffffffa60001,
+	},
+	P: []uint64{
+		// 60 x 2
+		0xffffffffffc0001, 0xfffffffff840001,
+	},
+	Scale: 1 << 52,
+	Sigma: rlwe.DefaultSigma,
+}
+
+//export newMPHEServer
+func newMPHEServer(user_idx C.int) *C.MPHEServer {
 	server := (*C.MPHEServer)(C.malloc(C.sizeof_MPHEServer))
 
 	// func genTestContext(user_id int) *testParams {
@@ -260,6 +279,171 @@ func genServerParams(user_idx C.int) *C.MPHEServer {
 	// 	panic(err)
 	// }
 	return server
+}
+
+//export encryptFromPk
+func encryptFromPk(pk *C.PolyQPPair, array *C.double, arraySize C.size_t, user_idx C.int) *C.Ciphertext {
+	// func encryptFromPk(paramsLiteral *C.ParametersLiteral, pk *C.PolyQPPair, array *C.complexdouble, arraySize C.size_t, user_idx C.int) *C.Message {
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	// server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
+
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+
+	// ckksParams, err := ckks.NewParametersFromLiteral(*paramsLiteral)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	PARAMS := mkckks.NewParameters(ckksParams)
+
+	// server.params = *convParams(&PARAMS)
+
+	// kgen := mkckks.NewKeyGenerator(PARAMS)
+
+	// params := convCKKSParams(parms)
+	// encoder := ckks.NewEncoder(params)
+
+	// publicKey := ckks.NewPublicKey(params)
+
+	publicKey := mkrlwe.NewPublicKey(PARAMS.Parameters, strconv.Itoa(int(user_idx)))
+
+	// pk.Value[0] = params.RingQP().NewPoly()
+	// pk.Value[1] = params.RingQP().NewPoly()
+	// pk.ID = id
+	// publicKey.ID = strconv.Itoa(int(user_idx))
+
+	// publicKey := ckks.NewPublicKey(params)
+	pkPolyQP := convS2RingPolyQP(pk)
+	publicKey.Value[0] = pkPolyQP[0].CopyNew()
+	publicKey.Value[1] = pkPolyQP[1].CopyNew()
+
+	// publicKey.Set(convS2RingPoly(pk))
+	// encryptor := ckks.NewEncryptorFromPk(params, publicKey)
+
+	// Encrypt the array element-wise
+	size := int(arraySize)
+	list := (*[1 << 30]C.double)(unsafe.Pointer(array))[:size:size]
+
+	cts := new(mkckks.Ciphertext)
+	msg := mkckks.NewMessage(PARAMS)
+
+	for i, elem := range list {
+		val := complex(float64(elem), 0.0)
+		// val := complex(float64(elem), 0.0)
+		msg.Value[i] = val
+		// pt := encoder.EncodeNew([]complex128{val}, params.LogSlots())
+		// cts[i] = encryptor.EncryptNew(pt)
+	}
+	encryptor := mkckks.NewEncryptor(PARAMS)
+
+	cts = encryptor.EncryptMsgNew(msg, publicKey)
+
+	// return convData(cts)
+	return convCiphertext(cts)
+}
+
+//export decrypt
+func decrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble {
+
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	// server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
+
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+
+	// ckksParams, err := ckks.NewParametersFromLiteral(*paramsLiteral)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	PARAMS := mkckks.NewParameters(ckksParams)
+
+	// params := convCKKSParams(parms)
+	encoder := ckks.NewEncoder(params)
+
+	secretKey := mkrlwe.NewSecretKey(PARAMS.Parameters, strconv.Itoa(int(user_idx)))
+
+	skPolyQP := convRingPolyQP(sk)
+	secretKey.Value = skPolyQP.CopyNew()
+	// secretKey := ckks.NewSecretKey(params)
+	// secretKey.Set(convRingPoly(sk))
+	// decryptor := ckks.NewDecryptor(params, secretKey)
+	decryptor := mkckks.NewDecryptor(PARAMS)
+	// Decrypt the array element-wise
+	// cts := convSckksCiphertext(data)
+	cts := convMKCKKSCiphertext(ciphertext)
+	values := make([]C.double, int(ciphertext.size))
+
+	for i, ct := range cts {
+		pt := decryptor.DecryptNew(ct)
+		v := encoder.Decode(pt, params.LogSlots())[0]
+		values[i] = C.double(real(v))
+	}
+
+	// Populate C.Ldouble
+	array := (*C.Ldouble)(C.malloc(C.sizeof_Ldouble))
+
+	array.data = (*C.double)(&values[0])
+	array.size = C.size_t(len(values))
+
+	return array
+}
+
+//export addCTs
+func addCTs(op1 *C.Ciphertext, op2 *C.Ciphertext) *C.Ciphertext {
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	PARAMS := mkckks.NewParameters(ckksParams)
+
+	ct1 := convMKCKKSCiphertext(op1)
+	ct2 := convMKCKKSCiphertext(op2)
+
+	evaluator := mkckks.NewEvaluator(PARAMS)
+	ct3 := evaluator.AddNew(ct1, ct2)
+
+	return convCiphertext(ct3)
+}
+
+//export multiplyCTConst
+func multiplyCTConst(op1 *C.Ciphertext, op2 C.double) *C.Ciphertext {
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+
+	if err != nil {
+		panic(err)
+	}
+
+	PARAMS := mkckks.NewParameters(ckksParams)
+	ct := convMKCKKSCiphertext(op1)
+	constant := float64(op2)
+	evaluator := mkckks.NewEvaluator(PARAMS)
+
+	evaluator.MultByConst(ct, constant, ct)
+	ct.Scale *= float64(constant)
+	evaluator.Rescale(ct, PARAMS.Scale(), ct)
+	return convCiphertext(ct)
 }
 
 func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *testParam, err error) {
@@ -671,8 +855,8 @@ func convS2RingPolyQP(pp *C.PolyQPPair) [2]rlwe.PolyQP {
 
 /// Ciphertext
 
-// *mkrlwe.Ciphertext --> *C.Ciphertext
-func convCiphertext(cc *mkrlwe.Ciphertext) *C.Ciphertext {
+// *mkckks.Ciphertext --> *C.Ciphertext
+func convCiphertext(cc *mkckks.Ciphertext) *C.Ciphertext {
 	c := (*C.Ciphertext)(C.malloc(C.sizeof_Ciphertext))
 
 	// Retrieve each polynomial making up the Ciphertext
@@ -703,7 +887,7 @@ func convCiphertext(cc *mkrlwe.Ciphertext) *C.Ciphertext {
 	c.value = (*C.Poly)(&value[0])
 	c.size = C.size_t(len(value))
 	c.idx = (C.int)(user_id)
-	// c.scale = C.double(cc.scale)
+	c.scale = C.double(cc.Scale)
 	// c.isNTT = C.bool(cc.Element.IsNTT())
 
 	return c
@@ -728,8 +912,8 @@ func convCiphertext(cc *mkrlwe.Ciphertext) *C.Ciphertext {
 // 	return c
 // }
 
-// *C.Ciphertext --> *mkrlwe.Ciphertext
-func convMKRLWECiphertext(c *C.Ciphertext) *mkrlwe.Ciphertext {
+// *C.Ciphertext --> *mkckks.Ciphertext
+func convMKCKKSCiphertext(c *C.Ciphertext) *mkckks.Ciphertext {
 	size := int(c.size)
 	list := (*[1 << 30]C.Poly)(unsafe.Pointer(c.value))[:size:size]
 
@@ -746,10 +930,11 @@ func convMKRLWECiphertext(c *C.Ciphertext) *mkrlwe.Ciphertext {
 	}
 
 	// Populate ckks.Ciphertext
-	cc := new(mkrlwe.Ciphertext)
+	cc := new(mkckks.Ciphertext)
 	// cc.Value = make(map[string]*ring.Poly)
 
 	cc.Value = value
+	cc.Scale = float64(c.scale)
 	// cc.SetValue(value)
 	// cc.Element.SetScale(float64(c.scale))
 	// cc.Element.SetIsNTT(bool(c.isNTT))
