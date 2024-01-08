@@ -1,7 +1,10 @@
 package mkckks
 
-import "github.com/ldsec/lattigo/v2/ckks"
-import "mk-lattigo/mkrlwe"
+import (
+	"mk-lattigo/mkrlwe"
+
+	"github.com/ldsec/lattigo/v2/ckks"
+)
 
 type Decryptor struct {
 	*mkrlwe.Decryptor
@@ -26,6 +29,11 @@ func NewDecryptor(params Parameters) *Decryptor {
 // PartialDecrypt partially decrypts the ct with single secretkey sk and update result inplace
 func (dec *Decryptor) PartialDecrypt(ct *Ciphertext, sk *mkrlwe.SecretKey) {
 	dec.Decryptor.PartialDecrypt(ct.Ciphertext, sk)
+}
+
+// MyPartialDecrypt partially decrypts the ct with single secretkey sk and update result in ct.Value[id]
+func (dec *Decryptor) MyPartialDecrypt(ct *Ciphertext, sk *mkrlwe.SecretKey) {
+	dec.Decryptor.MyPartialDecrypt(ct.Ciphertext, sk)
 }
 
 // Decrypt decrypts the ciphertext with given secretkey set and write the result in ptOut.

@@ -1,8 +1,10 @@
 package mkrlwe
 
-import "github.com/ldsec/lattigo/v2/ring"
-import "github.com/ldsec/lattigo/v2/rlwe"
-import "github.com/ldsec/lattigo/v2/utils"
+import (
+	"github.com/ldsec/lattigo/v2/ring"
+	"github.com/ldsec/lattigo/v2/rlwe"
+	"github.com/ldsec/lattigo/v2/utils"
+)
 
 // decryptor is a structure used to decrypt ciphertext. It stores the secret-key.
 type Decryptor struct {
@@ -40,6 +42,26 @@ func (decryptor *Decryptor) PartialDecrypt(ct *Ciphertext, sk *SecretKey) {
 
 	ringQ.AddLvl(level, ct.Value["0"], ct.Value[id], ct.Value["0"])
 	delete(ct.Value, id)
+}
+
+// MyPartialDecrypt partially decrypts the ct with single secretkey sk and update result in ct.Value[id]
+func (decryptor *Decryptor) MyPartialDecrypt(ct *Ciphertext, sk *SecretKey) {
+	ringQ := decryptor.ringQ
+	id := sk.ID
+	level := ct.Level()
+
+	if !ct.Value[id].IsNTT {
+		ringQ.NTTLvl(level, ct.Value[id], ct.Value[id])
+	}
+
+	ringQ.MulCoeffsMontgomeryLvl(level, ct.Value[id], sk.Value.Q, ct.Value[id])
+
+	if !ct.Value[id].IsNTT {
+		ringQ.InvNTTLvl(level, ct.Value[id], ct.Value[id])
+	}
+
+	// ringQ.AddLvl(level, ct.Value["0"], ct.Value[id], ct.Value["0"])
+	// delete(ct.Value, id)
 }
 
 // Decrypt decrypts the ciphertext with given secretkey set and write the result in ptOut.

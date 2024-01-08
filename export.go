@@ -347,9 +347,10 @@ func encryptFromPk(pk *C.PolyQPPair, array *C.double, arraySize C.size_t, user_i
 	return convCiphertext(cts)
 }
 
-//export decrypt
-func decrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble {
-
+//export partialDecrypt
+func partialDecrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble {
+	// Perform partial decryption using a single sk rather than skSet, update decrypted result in ct.Value[id],
+	// to be aggregated with ct.Value["0"] and other participants' ct.Value[id]
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
 	// server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
 
@@ -368,7 +369,7 @@ func decrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble 
 	PARAMS := mkckks.NewParameters(ckksParams)
 
 	// params := convCKKSParams(parms)
-	encoder := ckks.NewEncoder(params)
+	// encoder := ckks.NewEncoder(params)
 
 	secretKey := mkrlwe.NewSecretKey(PARAMS.Parameters, strconv.Itoa(int(user_idx)))
 
@@ -378,24 +379,34 @@ func decrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble 
 	// secretKey.Set(convRingPoly(sk))
 	// decryptor := ckks.NewDecryptor(params, secretKey)
 	decryptor := mkckks.NewDecryptor(PARAMS)
+
+	ct := convMKCKKSCiphertext(ciphertext)
+	ctTmp := ct.CopyNew()
+	decryptor.MyPartialDecrypt(ctTmp, secretKey)
+
 	// Decrypt the array element-wise
 	// cts := convSckksCiphertext(data)
-	cts := convMKCKKSCiphertext(ciphertext)
-	values := make([]C.double, int(ciphertext.size))
+	// cts := convMKCKKSCiphertext(ciphertext)
+	// values := make([]C.double, int(ciphertext.size))
 
-	for i, ct := range cts {
-		pt := decryptor.DecryptNew(ct)
-		v := encoder.Decode(pt, params.LogSlots())[0]
-		values[i] = C.double(real(v))
-	}
+	// for i, ct := range cts {
+	// 	pt := decryptor.DecryptNew(ct)
+	// 	v := encoder.Decode(pt, params.LogSlots())[0]
+	// 	values[i] = C.double(real(v))
+	// }
 
-	// Populate C.Ldouble
-	array := (*C.Ldouble)(C.malloc(C.sizeof_Ldouble))
+	// // Populate C.Ldouble
+	// array := (*C.Ldouble)(C.malloc(C.sizeof_Ldouble))
 
-	array.data = (*C.double)(&values[0])
-	array.size = C.size_t(len(values))
+	// array.data = (*C.double)(&values[0])
+	// array.size = C.size_t(len(values))
 
-	return array
+	return convCiphertext(ctTmp)
+}
+
+//export aggregatePartialDecryptedCTs
+func aggregatePartialDecryptedCTs() *C.Ciphertext {
+
 }
 
 //export addCTs
