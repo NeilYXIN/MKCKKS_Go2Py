@@ -116,7 +116,6 @@ typedef struct {
 */
 import "C"
 import (
-	"flag"
 	"fmt"
 	"mk-lattigo/mkckks"
 	"mk-lattigo/mkrlwe"
@@ -181,28 +180,28 @@ func newMPHEServer(user_idx C.int) *C.MPHEServer {
 
 	// func genTestContext(user_id int) *testParams {
 	var (
-		PN15QP880 = ckks.ParametersLiteral{
-			LogN:     15,
-			LogSlots: 14,
-			//60 + 13x54
-			Q: []uint64{
-				0xfffffffff6a0001,
+		// PN15QP880 = ckks.ParametersLiteral{
+		// 	LogN:     15,
+		// 	LogSlots: 14,
+		// 	//60 + 13x54
+		// 	Q: []uint64{
+		// 		0xfffffffff6a0001,
 
-				0x3fffffffd60001, 0x3fffffffca0001,
-				0x3fffffff6d0001, 0x3fffffff5d0001,
-				0x3fffffff550001, 0x3fffffff390001,
-				0x3fffffff360001, 0x3fffffff2a0001,
-				0x3fffffff000001, 0x3ffffffefa0001,
-				0x3ffffffef40001, 0x3ffffffed70001,
-				0x3ffffffed30001,
-			},
-			P: []uint64{
-				//59 x 2
-				0x7ffffffffe70001, 0x7ffffffffe10001,
-			},
-			Scale: 1 << 54,
-			Sigma: rlwe.DefaultSigma,
-		}
+		// 		0x3fffffffd60001, 0x3fffffffca0001,
+		// 		0x3fffffff6d0001, 0x3fffffff5d0001,
+		// 		0x3fffffff550001, 0x3fffffff390001,
+		// 		0x3fffffff360001, 0x3fffffff2a0001,
+		// 		0x3fffffff000001, 0x3ffffffefa0001,
+		// 		0x3ffffffef40001, 0x3ffffffed70001,
+		// 		0x3ffffffed30001,
+		// 	},
+		// 	P: []uint64{
+		// 		//59 x 2
+		// 		0x7ffffffffe70001, 0x7ffffffffe10001,
+		// 	},
+		// 	Scale: 1 << 54,
+		// 	Sigma: rlwe.DefaultSigma,
+		// }
 		PN14QP439 = ckks.ParametersLiteral{
 			LogN:     14,
 			LogSlots: 13,
@@ -260,8 +259,9 @@ func newMPHEServer(user_idx C.int) *C.MPHEServer {
 	server.sk = *convPolyQP(&sk.SecretKey.Value)
 	server.pk = *convPolyQPPair(pk.PublicKey.Value)
 
-	r := kgen.GenSecretKey(user_id)
-	rlk := kgen.GenRelinearizationKey(sk, r)
+	// r := kgen.GenSecretKey(user_id)
+	// rlk := kgen.GenRelinearizationKey(sk, r)
+
 	// server.rlk = // TODO: rlk
 
 	// userList := make([]string, maxUsers)
@@ -577,95 +577,95 @@ func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *
 }
 
 func main() {
-	// Get a random number between 0 and 99 inclusive.
-	var maxUsers = flag.Int("n", 4, "maximum number of parties")
+	// // Get a random number between 0 and 99 inclusive.
+	// var maxUsers = flag.Int("n", 4, "maximum number of parties")
 
-	var (
-		PN15QP880 = ckks.ParametersLiteral{
-			LogN:     15,
-			LogSlots: 14,
-			//60 + 13x54
-			Q: []uint64{
-				0xfffffffff6a0001,
+	// var (
+	// 	PN15QP880 = ckks.ParametersLiteral{
+	// 		LogN:     15,
+	// 		LogSlots: 14,
+	// 		//60 + 13x54
+	// 		Q: []uint64{
+	// 			0xfffffffff6a0001,
 
-				0x3fffffffd60001, 0x3fffffffca0001,
-				0x3fffffff6d0001, 0x3fffffff5d0001,
-				0x3fffffff550001, 0x3fffffff390001,
-				0x3fffffff360001, 0x3fffffff2a0001,
-				0x3fffffff000001, 0x3ffffffefa0001,
-				0x3ffffffef40001, 0x3ffffffed70001,
-				0x3ffffffed30001,
-			},
-			P: []uint64{
-				//59 x 2
-				0x7ffffffffe70001, 0x7ffffffffe10001,
-			},
-			Scale: 1 << 54,
-			Sigma: rlwe.DefaultSigma,
-		}
-		PN14QP439 = ckks.ParametersLiteral{
-			LogN:     14,
-			LogSlots: 13,
-			Q: []uint64{
-				// 59 + 5x52
-				0x7ffffffffe70001,
+	// 			0x3fffffffd60001, 0x3fffffffca0001,
+	// 			0x3fffffff6d0001, 0x3fffffff5d0001,
+	// 			0x3fffffff550001, 0x3fffffff390001,
+	// 			0x3fffffff360001, 0x3fffffff2a0001,
+	// 			0x3fffffff000001, 0x3ffffffefa0001,
+	// 			0x3ffffffef40001, 0x3ffffffed70001,
+	// 			0x3ffffffed30001,
+	// 		},
+	// 		P: []uint64{
+	// 			//59 x 2
+	// 			0x7ffffffffe70001, 0x7ffffffffe10001,
+	// 		},
+	// 		Scale: 1 << 54,
+	// 		Sigma: rlwe.DefaultSigma,
+	// 	}
+	// 	PN14QP439 = ckks.ParametersLiteral{
+	// 		LogN:     14,
+	// 		LogSlots: 13,
+	// 		Q: []uint64{
+	// 			// 59 + 5x52
+	// 			0x7ffffffffe70001,
 
-				0xffffffff00001, 0xfffffffe40001,
-				0xfffffffe20001, 0xfffffffbe0001,
-				0xfffffffa60001,
-			},
-			P: []uint64{
-				// 60 x 2
-				0xffffffffffc0001, 0xfffffffff840001,
-			},
-			Scale: 1 << 52,
-			Sigma: rlwe.DefaultSigma,
-		}
-	)
+	// 			0xffffffff00001, 0xfffffffe40001,
+	// 			0xfffffffe20001, 0xfffffffbe0001,
+	// 			0xfffffffa60001,
+	// 		},
+	// 		P: []uint64{
+	// 			// 60 x 2
+	// 			0xffffffffffc0001, 0xfffffffff840001,
+	// 		},
+	// 		Scale: 1 << 52,
+	// 		Sigma: rlwe.DefaultSigma,
+	// 	}
+	// )
 
+	// // defaultParams := []ckks.ParametersLiteral{PN14QP439, PN15QP880}
 	// defaultParams := []ckks.ParametersLiteral{PN14QP439, PN15QP880}
-	defaultParams := []ckks.ParametersLiteral{PN14QP439, PN15QP880}
 
-	for _, defaultParam := range defaultParams {
-		ckksParams, err := ckks.NewParametersFromLiteral(defaultParam)
+	// for _, defaultParam := range defaultParams {
+	// 	ckksParams, err := ckks.NewParametersFromLiteral(defaultParam)
 
-		if ckksParams.PCount() < 2 {
-			continue
-		}
+	// 	if ckksParams.PCount() < 2 {
+	// 		continue
+	// 	}
 
-		if err != nil {
-			panic(err)
-		}
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
 
-		params := mkckks.NewParameters(ckksParams)
-		userList := make([]string, *maxUsers)
-		idset := mkrlwe.NewIDSet()
+	// 	params := mkckks.NewParameters(ckksParams)
+	// 	userList := make([]string, *maxUsers)
+	// 	idset := mkrlwe.NewIDSet()
 
-		for i := range userList {
-			userList[i] = "user" + strconv.Itoa(i)
-			idset.Add(userList[i])
-		}
-		user_id := "user" + strconv.Itoa(1)
-		var testContext *testParam
-		if testContext, err = genTestParam(params, user_id); err != nil {
-			panic(err)
-		}
+	// 	for i := range userList {
+	// 		userList[i] = "user" + strconv.Itoa(i)
+	// 		idset.Add(userList[i])
+	// 	}
+	// 	user_id := "user" + strconv.Itoa(1)
+	// 	var testContext *testParam
+	// 	if testContext, err = genTestParam(params, user_id); err != nil {
+	// 		panic(err)
+	// 	}
 
-		// for numUsers := 2; numUsers <= *maxUsers; numUsers *= 2 {
-		// 	// benchMulAndRelin(testContext, userList[:numUsers])
-		// 	//benchMulAndRelinHoisted(testContext, userList[:numUsers], b)
-		// 	//benchSquareHoisted(testContext, userList[:numUsers], b)
-		// }
+	// 	// for numUsers := 2; numUsers <= *maxUsers; numUsers *= 2 {
+	// 	// 	// benchMulAndRelin(testContext, userList[:numUsers])
+	// 	// 	//benchMulAndRelinHoisted(testContext, userList[:numUsers], b)
+	// 	// 	//benchSquareHoisted(testContext, userList[:numUsers], b)
+	// 	// }
 
-		/*
+	// 	/*
 
-		   for numUsers := 2; numUsers <= maxUsers; numUsers *= 2 {
-		       benchRotate(testContext, userList[:numUsers], b)
-		   }
+	// 	   for numUsers := 2; numUsers <= maxUsers; numUsers *= 2 {
+	// 	       benchRotate(testContext, userList[:numUsers], b)
+	// 	   }
 
-		*/
+	// 	*/
 
-	}
+	// }
 }
 
 func newTestVectors(testContext *testParam, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {

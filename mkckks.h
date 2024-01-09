@@ -19,6 +19,122 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 /* Start of preamble from import "C" comments.  */
 
 
+#line 3 "export.go"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <complex.h>
+
+typedef struct {
+	double* data;
+	size_t size;
+} Ldouble;
+
+typedef struct {
+	long long unsigned int* data;
+	size_t size;
+} Luint64;
+
+// Message
+typedef struct {
+	double complex* data;
+	size_t size;
+} Message;
+
+// Params
+typedef struct {
+	Luint64 qi;
+	Luint64 pi;
+
+    int logN;
+	int logSlots;
+	int gamma;
+
+	double scale;
+	double sigma;
+} Params;
+
+// ParametersLiteral
+typedef struct {
+	Luint64 qi;
+	Luint64 pi;
+
+    int logN;
+	int logSlots;
+
+	double scale;
+	double sigma;
+} ParametersLiteral;
+
+// Poly
+typedef struct {
+	Luint64* coeffs;
+	bool IsNTT;
+	bool IsMForm;
+	size_t size;
+} Poly;
+
+// PolyPair
+typedef struct {
+	Poly p0;
+	Poly p1;
+} PolyPair;
+
+// PolyQP
+typedef struct {
+	Poly* Q;
+	Poly* P;
+} PolyQP;
+
+// PolyQPPair
+typedef struct {
+	PolyQP qp0;
+	PolyQP qp1;
+} PolyQPPair;
+
+// Share
+typedef struct {
+	Poly* data;
+	size_t size;
+} Share;
+
+// Ciphertext
+typedef struct {
+	Poly* value;
+	size_t size;
+	int idx;
+
+	double scale;
+	// bool isNTT;
+} Ciphertext;
+
+// Data
+typedef struct {
+	Ciphertext* data;
+	size_t size;
+} Data;
+
+// MPHEServer
+typedef struct {
+	// Params params;
+	ParametersLiteral paramsLiteral;
+	Poly crs;
+	PolyQP sk;
+	PolyQPPair pk;
+	Data data;
+	int idx;
+} MPHEServer;
+
+// MPHEClient
+typedef struct {
+	Params params;
+	Poly crs;
+	Poly secretKey;
+	Poly publicKey;
+	Poly decryptionKey;
+} MPHEClient;
+
+#line 1 "cgo-generated-wrapper"
 
 
 /* End of preamble from import "C" comments.  */
@@ -74,7 +190,13 @@ typedef struct { void *data; GoInt len; GoInt cap; } GoSlice;
 extern "C" {
 #endif
 
-extern void main();
+extern MPHEServer* newMPHEServer(int user_idx);
+extern Ciphertext* encryptFromPk(PolyQPPair* pk, double* array, size_t arraySize, int user_idx);
+extern Ciphertext* partialDecrypt(PolyQP* sk, Ciphertext* ciphertext, int user_idx);
+extern Ciphertext* ringQAddLvl(Ciphertext* op1, int op1_id, Ciphertext* op2, int op2_id);
+extern Ldouble* decodeAfterPartialDecrypt(Ciphertext* ciphertext);
+extern Ciphertext* addCTs(Ciphertext* op1, Ciphertext* op2);
+extern Ciphertext* multiplyCTConst(Ciphertext* op1, double op2);
 
 #ifdef __cplusplus
 }
