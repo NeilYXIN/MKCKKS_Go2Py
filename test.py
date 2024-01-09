@@ -1,6 +1,6 @@
 from ctypes import *
 
-lib = ctypes.CDLL('./bench.so')  # Or hello.so if on Linux.
+lib = ctypes.CDLL('./mkckks.so')  # Or hello.so if on Linux.
 main = lib.main
 
 class _Params(Structure):

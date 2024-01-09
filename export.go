@@ -820,6 +820,8 @@ func convPoly(r *ring.Poly) *C.Poly {
 	// Populate C.Poly
 	p.coeffs = (*C.Luint64)(&coeffs[0])
 	p.size = C.size_t(len(coeffs))
+	p.IsNTT = C.bool(r.IsNTT)
+	p.IsMForm = C.bool(r.IsMForm)
 
 	return p
 }
@@ -876,6 +878,8 @@ func convRingPoly(p *C.Poly) *ring.Poly {
 	// Populate ring.Poly
 	r := new(ring.Poly)
 	r.Coeffs = coeffs
+	r.IsNTT = bool(p.IsNTT)
+	r.IsMForm = bool(p.IsMForm)
 
 	return r
 }
