@@ -4,6 +4,7 @@ import (
 	"mk-lattigo/mkrlwe"
 
 	"github.com/ldsec/lattigo/v2/ckks"
+	"github.com/ldsec/lattigo/v2/ring"
 )
 
 type Decryptor struct {
@@ -24,6 +25,16 @@ func NewDecryptor(params Parameters) *Decryptor {
 	ret.ptxtPool = ckks.NewPlaintext(ckksParams, params.MaxLevel(), params.Scale())
 	ret.ptxtPool.Value.IsNTT = false
 	return ret
+}
+
+// PtxtPool returns the ptxtPool
+func (dec *Decryptor) PtxtPool() *ckks.Plaintext {
+	return dec.ptxtPool
+}
+
+// RingQ returns the Decryptor.RingQ()
+func (dec *Decryptor) RingQ() *ring.Ring {
+	return dec.Decryptor.RingQ()
 }
 
 // PartialDecrypt partially decrypts the ct with single secretkey sk and update result inplace
@@ -48,4 +59,9 @@ func (dec *Decryptor) Decrypt(ciphertext *Ciphertext, skSet *mkrlwe.SecretKeySet
 	msg.Value = dec.encoder.Decode(dec.ptxtPool, dec.params.logSlots)
 
 	return
+}
+
+// Wrapper for dec.encoder.Decode(plaintext), return message.Value ([] complex128)
+func (dec *Decryptor) Decode(plaintext *ckks.Plaintext) []complex128 {
+	return dec.encoder.Decode(dec.ptxtPool, dec.params.logSlots)
 }

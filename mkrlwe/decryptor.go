@@ -24,6 +24,11 @@ func NewDecryptor(params Parameters) *Decryptor {
 	}
 }
 
+// RingQ
+func (decryptor *Decryptor) RingQ() *ring.Ring {
+	return decryptor.ringQ
+}
+
 // PartialDecrypt partially decrypts the ct with single secretkey sk and update result inplace
 func (decryptor *Decryptor) PartialDecrypt(ct *Ciphertext, sk *SecretKey) {
 	ringQ := decryptor.ringQ

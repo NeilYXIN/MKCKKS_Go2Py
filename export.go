@@ -348,80 +348,141 @@ func encryptFromPk(pk *C.PolyQPPair, array *C.double, arraySize C.size_t, user_i
 }
 
 //export partialDecrypt
-func partialDecrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ldouble {
-	// Perform partial decryption using a single sk rather than skSet, update decrypted result in ct.Value[id],
-	// to be aggregated with ct.Value["0"] and other participants' ct.Value[id]
+func partialDecrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.Ciphertext {
+	// Perform partial decryption using a single sk instead of skSet, update decrypted result in ct.Value[id],
+	// requires using ringQAddLvl() to aggregate ct.Value["0"] and other participants' ct.Value[id],
+	// then call decodeAfterPartialDecrypt() once the decrypted ciphertext is obtained
+
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
-	// server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
-
 	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
-
-	// ckksParams, err := ckks.NewParametersFromLiteral(*paramsLiteral)
 	if ckksParams.PCount() < 2 {
 		fmt.Printf("ckks Params.PCount < 2")
 		// continue
 	}
-
 	if err != nil {
 		panic(err)
 	}
-
 	PARAMS := mkckks.NewParameters(ckksParams)
-
-	// params := convCKKSParams(parms)
-	// encoder := ckks.NewEncoder(params)
 
 	secretKey := mkrlwe.NewSecretKey(PARAMS.Parameters, strconv.Itoa(int(user_idx)))
 
 	skPolyQP := convRingPolyQP(sk)
 	secretKey.Value = skPolyQP.CopyNew()
-	// secretKey := ckks.NewSecretKey(params)
-	// secretKey.Set(convRingPoly(sk))
-	// decryptor := ckks.NewDecryptor(params, secretKey)
+
 	decryptor := mkckks.NewDecryptor(PARAMS)
 
 	ct := convMKCKKSCiphertext(ciphertext)
 	ctTmp := ct.CopyNew()
 	decryptor.MyPartialDecrypt(ctTmp, secretKey)
 
-	// Decrypt the array element-wise
-	// cts := convSckksCiphertext(data)
-	// cts := convMKCKKSCiphertext(ciphertext)
-	// values := make([]C.double, int(ciphertext.size))
-
-	// for i, ct := range cts {
-	// 	pt := decryptor.DecryptNew(ct)
-	// 	v := encoder.Decode(pt, params.LogSlots())[0]
-	// 	values[i] = C.double(real(v))
-	// }
-
-	// // Populate C.Ldouble
-	// array := (*C.Ldouble)(C.malloc(C.sizeof_Ldouble))
-
-	// array.data = (*C.double)(&values[0])
-	// array.size = C.size_t(len(values))
-
 	return convCiphertext(ctTmp)
 }
 
-//export aggregatePartialDecryptedCTs
-func aggregatePartialDecryptedCTs() *C.Ciphertext {
+//export ringQAddLvl
+func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.int) *C.Ciphertext {
+	// Add op1.Value[op1_id] and op2.Value[op2_id], write results in op1.Value[op1_id]
 
-}
-
-//export addCTs
-func addCTs(op1 *C.Ciphertext, op2 *C.Ciphertext) *C.Ciphertext {
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
 	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
 	if ckksParams.PCount() < 2 {
 		fmt.Printf("ckks Params.PCount < 2")
 		// continue
 	}
-
 	if err != nil {
 		panic(err)
 	}
+	PARAMS := mkckks.NewParameters(ckksParams)
+	// decryptor := mkckks.NewDecryptor(PARAMS)
 
+	ct1 := convMKCKKSCiphertext(op1)
+	ct2 := convMKCKKSCiphertext(op2)
+	ct1_op_id := strconv.Itoa(int(op1_id)) // operator id for ct.Value[id]
+	ct2_op_id := strconv.Itoa(int(op2_id))
+
+	// ringQ := decryptor.ringQ
+	ringQ := PARAMS.RingQ()
+
+	level := ct1.Level()
+	if ct1.Level() != ct2.Level() {
+		fmt.Printf("ringQAddLvl(): ct1.Level() != ct2.Level()")
+	}
+
+	ringQ.AddLvl(level, ct1.Value[ct1_op_id], ct2.Value[ct2_op_id], ct1.Value[ct1_op_id])
+	if ct1_op_id != "0" {
+		delete(ct1.Value, ct1_op_id)
+	}
+	if ct2_op_id != "0" {
+		delete(ct1.Value, ct2_op_id)
+	}
+	// delete(ct.Value, id)
+	return convCiphertext(ct1)
+
+}
+
+//export decodeAfterPartialDecrypt
+func decodeAfterPartialDecrypt(ciphertext *C.Ciphertext) *C.Ldouble {
+	// Perform post processing after obtaining the decrypted ciphertext and perform decoding, return double plaintext
+
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+	if err != nil {
+		panic(err)
+	}
+	PARAMS := mkckks.NewParameters(ckksParams)
+
+	decryptor := mkckks.NewDecryptor(PARAMS)
+
+	ct := convMKCKKSCiphertext(ciphertext)
+
+	// Pre and Post processing in mkrlwe.decryptor.Decrypt()
+	ringQ := decryptor.RingQ()
+	plaintext := decryptor.PtxtPool()
+
+	level := utils.MinInt(ct.Level(), plaintext.Level())
+	plaintext.Value.Coeffs = plaintext.Value.Coeffs[:level+1]
+
+	if len(ct.Value) > 1 {
+		panic("Cannot Decrypt: there is a missing secretkey")
+	}
+
+	ringQ.ReduceLvl(level, ct.Value["0"], plaintext.Value)
+
+	// Post processing in mkckks.decryptor.Decrypt()
+	plaintext.Scale = ct.Scale
+	msg := new(mkckks.Message)
+	msg.Value = decryptor.Decode(plaintext)
+
+	values := make([]C.double, len(msg.Value))
+
+	for i, complexVal := range msg.Value {
+		values[i] = C.double(real(complexVal))
+	}
+
+	// Populate C.Ldouble
+	array := (*C.Ldouble)(C.malloc(C.sizeof_Ldouble))
+
+	array.data = (*C.double)(&values[0])
+	array.size = C.size_t(len(values))
+	return array
+
+}
+
+//export addCTs
+func addCTs(op1 *C.Ciphertext, op2 *C.Ciphertext) *C.Ciphertext {
+	// homomorphic addition on op1 and op2, results are returned in a new ciphertext
+	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
+	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
+	if ckksParams.PCount() < 2 {
+		fmt.Printf("ckks Params.PCount < 2")
+		// continue
+	}
+	if err != nil {
+		panic(err)
+	}
 	PARAMS := mkckks.NewParameters(ckksParams)
 
 	ct1 := convMKCKKSCiphertext(op1)
@@ -435,18 +496,18 @@ func addCTs(op1 *C.Ciphertext, op2 *C.Ciphertext) *C.Ciphertext {
 
 //export multiplyCTConst
 func multiplyCTConst(op1 *C.Ciphertext, op2 C.double) *C.Ciphertext {
+	// homomorphic multiplication on op1 (ciphertext) and op2 (constant in double), results are updated in op1
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
 	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
 	if ckksParams.PCount() < 2 {
 		fmt.Printf("ckks Params.PCount < 2")
 		// continue
 	}
-
 	if err != nil {
 		panic(err)
 	}
-
 	PARAMS := mkckks.NewParameters(ckksParams)
+
 	ct := convMKCKKSCiphertext(op1)
 	constant := float64(op2)
 	evaluator := mkckks.NewEvaluator(PARAMS)
@@ -515,7 +576,6 @@ func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *
 
 }
 
-//export main
 func main() {
 	// Get a random number between 0 and 99 inclusive.
 	var maxUsers = flag.Int("n", 4, "maximum number of parties")
