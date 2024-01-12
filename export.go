@@ -253,7 +253,7 @@ func newMPHEServer(user_idx C.int) *C.MPHEServer {
 	server.idx = user_idx // user_idx is C.int
 	// user_id := "user" + strconv.Itoa(int(server.idx))
 	user_id := strconv.Itoa(int(server.idx)) // C.int -> go int -> go string
-	fmt.Printf(user_id)
+	// fmt.Printf(user_id)
 
 	sk, pk := kgen.GenKeyPair(user_id)
 	server.sk = *convPolyQP(&sk.SecretKey.Value)
@@ -522,63 +522,63 @@ func multiplyCTConst(op1 *C.Ciphertext, op2 C.double) *C.Ciphertext {
 	return convCiphertext(ct)
 }
 
-func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *testParam, err error) {
+// func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *testParam, err error) {
 
-	testContext = new(testParam)
+// 	testContext = new(testParam)
 
-	testContext.params = defaultParam
+// 	testContext.params = defaultParam
 
-	kgen := mkckks.NewKeyGenerator(testContext.params)
+// 	kgen := mkckks.NewKeyGenerator(testContext.params)
 
-	// testContext.skSet = mkrlwe.NewSecretKeySet()
+// 	// testContext.skSet = mkrlwe.NewSecretKeySet()
 
-	// testContext.pkSet = mkrlwe.NewPublicKeyKeySet()
-	// testContext.rlkSet = mkrlwe.NewRelinearizationKeyKeySet(defaultParam.Parameters)
-	// testContext.rtkSet = mkrlwe.NewRotationKeySet()
-	// testContext.cjkSet = mkrlwe.NewConjugationKeySet()
+// 	// testContext.pkSet = mkrlwe.NewPublicKeyKeySet()
+// 	// testContext.rlkSet = mkrlwe.NewRelinearizationKeyKeySet(defaultParam.Parameters)
+// 	// testContext.rtkSet = mkrlwe.NewRotationKeySet()
+// 	// testContext.cjkSet = mkrlwe.NewConjugationKeySet()
 
-	// gen sk, pk, rlk, rk
-	testContext.sk, testContext.pk = kgen.GenKeyPair(user_id)
-	r := testContext.kgen.GenSecretKey(user_id)
-	testContext.rlk = testContext.kgen.GenRelinearizationKey(testContext.sk, r)
-	//cjk := testContext.kgen.GenConjugationKey(sk)
+// 	// gen sk, pk, rlk, rk
+// 	testContext.sk, testContext.pk = kgen.GenKeyPair(user_id)
+// 	r := testContext.kgen.GenSecretKey(user_id)
+// 	testContext.rlk = testContext.kgen.GenRelinearizationKey(testContext.sk, r)
+// 	//cjk := testContext.kgen.GenConjugationKey(sk)
 
-	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
+// 	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
 
-	// testContext.skSet.AddSecretKey(sk)
-	// testContext.pkSet.AddPublicKey(pk)
-	// testContext.rlkSet.AddRelinearizationKey(rlk)
-	//testContext.cjkSet.AddConjugationKey(cjk)
+// 	// testContext.skSet.AddSecretKey(sk)
+// 	// testContext.pkSet.AddPublicKey(pk)
+// 	// testContext.rlkSet.AddRelinearizationKey(rlk)
+// 	//testContext.cjkSet.AddConjugationKey(cjk)
 
-	// for id := range idset.Value {
-	// 	sk, pk := testContext.kgen.GenKeyPair(id)
-	// 	r := testContext.kgen.GenSecretKey(id)
-	// 	rlk := testContext.kgen.GenRelinearizationKey(sk, r)
-	// 	//cjk := testContext.kgen.GenConjugationKey(sk)
+// 	// for id := range idset.Value {
+// 	// 	sk, pk := testContext.kgen.GenKeyPair(id)
+// 	// 	r := testContext.kgen.GenSecretKey(id)
+// 	// 	rlk := testContext.kgen.GenRelinearizationKey(sk, r)
+// 	// 	//cjk := testContext.kgen.GenConjugationKey(sk)
 
-	// 	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
+// 	// 	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
 
-	// 	testContext.skSet.AddSecretKey(sk)
-	// 	testContext.pkSet.AddPublicKey(pk)
-	// 	testContext.rlkSet.AddRelinearizationKey(rlk)
-	// 	//testContext.cjkSet.AddConjugationKey(cjk)
+// 	// 	testContext.skSet.AddSecretKey(sk)
+// 	// 	testContext.pkSet.AddPublicKey(pk)
+// 	// 	testContext.rlkSet.AddRelinearizationKey(rlk)
+// 	// 	//testContext.cjkSet.AddConjugationKey(cjk)
 
-	// }
+// 	// }
 
-	testContext.ringQ = defaultParam.RingQ()
+// 	testContext.ringQ = defaultParam.RingQ()
 
-	if testContext.prng, err = utils.NewPRNG(); err != nil {
-		return nil, err
-	}
+// 	if testContext.prng, err = utils.NewPRNG(); err != nil {
+// 		return nil, err
+// 	}
 
-	testContext.encryptor = mkckks.NewEncryptor(testContext.params)
-	testContext.decryptor = mkckks.NewDecryptor(testContext.params)
+// 	testContext.encryptor = mkckks.NewEncryptor(testContext.params)
+// 	testContext.decryptor = mkckks.NewDecryptor(testContext.params)
 
-	testContext.evaluator = mkckks.NewEvaluator(testContext.params)
+// 	testContext.evaluator = mkckks.NewEvaluator(testContext.params)
 
-	return testContext, nil
+// 	return testContext, nil
 
-}
+// }
 
 func main() {
 	// // Get a random number between 0 and 99 inclusive.
@@ -672,26 +672,26 @@ func main() {
 	// }
 }
 
-func newTestVectors(testContext *testParam, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {
+// func newTestVectors(testContext *testParam, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {
 
-	params := testContext.params
-	logSlots := testContext.params.LogSlots()
+// 	params := testContext.params
+// 	logSlots := testContext.params.LogSlots()
 
-	msg = mkckks.NewMessage(params)
+// 	msg = mkckks.NewMessage(params)
 
-	for i := 0; i < 1<<logSlots; i++ {
-		msg.Value[i] = complex(utils.RandFloat64(real(a), real(b)), utils.RandFloat64(imag(a), imag(b)))
-	}
+// 	for i := 0; i < 1<<logSlots; i++ {
+// 		msg.Value[i] = complex(utils.RandFloat64(real(a), real(b)), utils.RandFloat64(imag(a), imag(b)))
+// 	}
 
-	if testContext.encryptor != nil {
-		ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pk)
-		// ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pkSet.GetPublicKey(id))
-	} else {
-		panic("cannot newTestVectors: encryptor is not initialized!")
-	}
+// 	if testContext.encryptor != nil {
+// 		ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pk)
+// 		// ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pkSet.GetPublicKey(id))
+// 	} else {
+// 		panic("cannot newTestVectors: encryptor is not initialized!")
+// 	}
 
-	return msg, ciphertext
-}
+// 	return msg, ciphertext
+// }
 
 /* HELPER: Conversion between C and Go structs */
 // *ckks.ParametersLiteral --> *C.ParametersLiteral

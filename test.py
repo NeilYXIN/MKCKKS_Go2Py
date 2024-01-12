@@ -623,100 +623,76 @@ class _Conversion:
 # In[4]:
 
 
-server_id = 0
-server = MPHEServer(server_id)
+server = MPHEServer(server_id=0) # id for FL server has to be 0
+client_1 = MPHEServer(server_id=1) # id for FL client starts from 1
+client_2 = MPHEServer(server_id=2)
 
 
 # In[5]:
-
-
-client_id1 = 1
-client_1 = MPHEServer(client_id1)
-
-
-# In[6]:
-
-
-client_id2 = 2
-client_2 = MPHEServer(client_id2)
-
-
-# In[7]:
 
 
 weights1 = [ 0.1, 0.2, 2.1, -2.2 ]
 weights2 = [ 0.2, 0.3, 1.2, -1.2 ]
 
 
-# In[8]:
+# In[6]:
 
 
 ct1 = client_1.encryptFromPk(weights1)
 ct2 = client_2.encryptFromPk(weights2)
+ct3 = server.addCTs(ct1, ct2)
+
+
+# In[7]:
+
+
+ct4 = server.multiplyCTConst(ct1, 2.5)
+
+
+# In[8]:
+
+
+ct3_pd1 = client_1.partialDecrypt(ct3)
+ct3_pd2 = client_2.partialDecrypt(ct3)
 
 
 # In[9]:
 
 
-ct_3 = server.addCTs(ct1, ct2)
+ct3_pd_agg = server.ringAddLvl(ct3_pd1,0, ct3_pd1, 1)
+ct3_pd_agg = server.ringAddLvl(ct3_pd_agg,0, ct3_pd2, 2)
 
 
 # In[10]:
 
 
-ct_4 = server.multiplyCTConst(ct1, 2.5)
+dec_ct3 = server.decodeAfterPartialDecrypt(ct3_pd_agg)
+print(dec_ct3[:10])
+print(np.round(dec_ct3, 2)[:10])
 
 
 # In[11]:
 
 
-ct_3_pd1 = client_1.partialDecrypt(ct_3)
-ct_3_pd2 = client_2.partialDecrypt(ct_3)
+ct4_pd1 = client_1.partialDecrypt(ct4)
+ct4_agg = server.ringAddLvl(ct4_pd1,0, ct4_pd1, 1)
 
 
 # In[12]:
 
 
-ct_3_pd_agg = server.ringAddLvl(ct_3_pd1,0, ct_3_pd1, 1)
-ct_3_pd_agg = server.ringAddLvl(ct_3_pd_agg,0, ct_3_pd2, 2)
-
-
-# In[13]:
-
-
-dec_ct3 = server.decodeAfterPartialDecrypt(ct_3_pd_agg)
-print(dec_ct3[:10])
-
-
-# In[14]:
-
-
-dec_ct3_np = np.array(dec_ct3)
-print(np.round(dec_ct3_np, 2)[:10])
-
-
-# In[15]:
-
-
-ct_4_pd1 = client_1.partialDecrypt(ct_4)
-ct_4_agg = server.ringAddLvl(ct_4_pd1,0, ct_4_pd1, 1)
-
-
-# In[16]:
-
-
-dec_ct4 = server.decodeAfterPartialDecrypt(ct_4_agg)
+dec_ct4 = server.decodeAfterPartialDecrypt(ct4_agg)
 print(dec_ct4[:10])
+print(np.round(dec_ct4, 2)[:10])
 
 
-# In[17]:
+# In[ ]:
 
 
-dec_ct4_np = np.array(dec_ct4)
-print(np.round(dec_ct4_np, 2)[:10])
 
 
-# In[37]:
+
+# In[ ]:
 
 
 
