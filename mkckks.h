@@ -100,9 +100,9 @@ typedef struct {
 
 // Ciphertext
 typedef struct {
-	Poly* value;
+	Poly* data;
 	size_t size;
-	int idx;
+	int* idxs;
 
 	double scale;
 	// bool isNTT;

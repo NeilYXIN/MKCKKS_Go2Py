@@ -80,9 +80,9 @@ typedef struct {
 
 // Ciphertext
 typedef struct {
-	Poly* value;
+	Poly* data;
 	size_t size;
-	int idx;
+	int* idxs;
 
 	double scale;
 	// bool isNTT;
@@ -380,7 +380,7 @@ func partialDecrypt(sk *C.PolyQP, ciphertext *C.Ciphertext, user_idx C.int) *C.C
 
 //export ringQAddLvl
 func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.int) *C.Ciphertext {
-	// Add op1.Value[op1_id] and op2.Value[op2_id], write results in op1.Value[op1_id]
+	// Add op1.Value[op1_id] and op2.Value[op2_id], write results in a copy of op1.Value[op1_id]
 
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
 	ckksParams, err := ckks.NewParametersFromLiteral(*PARAMSLITERAL)
@@ -399,6 +399,8 @@ func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.in
 	ct1_op_id := strconv.Itoa(int(op1_id)) // operator id for ct.Value[id]
 	ct2_op_id := strconv.Itoa(int(op2_id))
 
+	ret := ct1.CopyNew()
+
 	// ringQ := decryptor.ringQ
 	ringQ := PARAMS.RingQ()
 
@@ -407,15 +409,17 @@ func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.in
 		fmt.Printf("ringQAddLvl(): ct1.Level() != ct2.Level()")
 	}
 
-	ringQ.AddLvl(level, ct1.Value[ct1_op_id], ct2.Value[ct2_op_id], ct1.Value[ct1_op_id])
+	ringQ.AddLvl(level, ct1.Value[ct1_op_id], ct2.Value[ct2_op_id], ret.Value[ct1_op_id])
 	if ct1_op_id != "0" {
-		delete(ct1.Value, ct1_op_id)
+		delete(ret.Value, ct1_op_id)
 	}
+
 	if ct2_op_id != "0" {
-		delete(ct1.Value, ct2_op_id)
+		delete(ret.Value, ct2_op_id)
 	}
+
 	// delete(ct.Value, id)
-	return convCiphertext(ct1)
+	return convCiphertext(ret)
 
 }
 
@@ -513,8 +517,8 @@ func multiplyCTConst(op1 *C.Ciphertext, op2 C.double) *C.Ciphertext {
 	evaluator := mkckks.NewEvaluator(PARAMS)
 
 	evaluator.MultByConst(ct, constant, ct)
-	ct.Scale *= float64(constant)
-	evaluator.Rescale(ct, PARAMS.Scale(), ct)
+	// ct.Scale *= float64(constant)
+	// evaluator.Rescale(ct, PARAMS.Scale(), ct)
 	return convCiphertext(ct)
 }
 
@@ -936,32 +940,35 @@ func convCiphertext(cc *mkckks.Ciphertext) *C.Ciphertext {
 
 	// Retrieve each polynomial making up the Ciphertext
 	value := make([]C.Poly, len(cc.Value))
-	if len(cc.Value) > 2 {
-		fmt.Printf("ERROR: mkrlwe.Ciphertext contains map length > 2!")
-	}
+	user_idxs := make([]C.int, len(cc.Value))
+	// if len(cc.Value) > 2 {
+	// 	fmt.Printf("WARNING: mkrlwe.Ciphertext contains map length > 2!")
+	// }
 	counter := 0
-	user_id := 0
+	// user_id := 0
 	for key, val := range cc.Value {
 		int_key, err := strconv.Atoi(key)
-		if int_key != 0 {
-			user_id = int_key
-			if counter == 0 {
-				fmt.Printf("ERROR: key with user_id was the first element in the map of mkrlwe.Ciphertext!")
-			}
-		}
+		// if int_key != 0 {
+		// 	user_id = int_key
+		// 	if counter == 0 {
+		// 		fmt.Printf("ERROR: key with user_id was the first element in the map of mkrlwe.Ciphertext!")
+		// 	}
+		// }
 		if err != nil {
 			// ... handle error
 			fmt.Printf("ERROR: Key in the map of mkrlwe.Ciphertext not a valid integer!")
 			panic(err)
 		}
 		value[counter] = *convPoly(val)
+		user_idxs[counter] = C.int(int_key)
 		counter = counter + 1
 	}
 
 	// Populate C.Ciphertext
-	c.value = (*C.Poly)(&value[0])
+	c.data = (*C.Poly)(&value[0])
 	c.size = C.size_t(len(value))
-	c.idx = (C.int)(user_id)
+	// c.idx = (C.int)(user_id)
+	c.idxs = (*C.int)(&user_idxs[0])
 	c.scale = C.double(cc.Scale)
 	// c.isNTT = C.bool(cc.Element.IsNTT())
 
@@ -990,25 +997,30 @@ func convCiphertext(cc *mkckks.Ciphertext) *C.Ciphertext {
 // *C.Ciphertext --> *mkckks.Ciphertext
 func convMKCKKSCiphertext(c *C.Ciphertext) *mkckks.Ciphertext {
 	size := int(c.size)
-	list := (*[1 << 30]C.Poly)(unsafe.Pointer(c.value))[:size:size]
+	list := (*[1 << 30]C.Poly)(unsafe.Pointer(c.data))[:size:size]
+	list_idxs := (*[1 << 30]C.int)(unsafe.Pointer(c.idxs))[:size:size]
 
 	// Extract []*ringPoly from []C.Poly
 	// value := make([]*ring.Poly, size)
 	value := make(map[string]*ring.Poly)
 	for i, poly := range list { // TODO: i is key, might not be user_idx
 		v := convRingPoly(&poly)
-		if i == 0 {
-			value["0"] = v
-		} else {
-			value[strconv.Itoa(int(c.idx))] = v
-		}
+		value[strconv.Itoa(int(list_idxs[i]))] = v
+		// if i == 0 {
+		// 	value["0"] = v
+		// } else {
+		// 	value[strconv.Itoa(int(c.idx))] = v
+		// }
 	}
 
 	// Populate ckks.Ciphertext
 	cc := new(mkckks.Ciphertext)
+	cc.Ciphertext = new(mkrlwe.Ciphertext)
+	cc.Ciphertext.Value = make(map[string]*ring.Poly)
 	// cc.Value = make(map[string]*ring.Poly)
 
 	cc.Value = value
+
 	cc.Scale = float64(c.scale)
 	// cc.SetValue(value)
 	// cc.Element.SetScale(float64(c.scale))
