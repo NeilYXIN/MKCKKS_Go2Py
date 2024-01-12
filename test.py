@@ -686,6 +686,62 @@ print(dec_ct4[:10])
 print(np.round(dec_ct4, 2)[:10])
 
 
+# In[13]:
+
+
+ct5 = server.multiplyCTConst(ct3, 2.5)
+
+
+# In[14]:
+
+
+ct5_pd1 = client_1.partialDecrypt(ct5)
+ct5_pd2 = client_2.partialDecrypt(ct5)
+
+
+# In[15]:
+
+
+ct5_pd_agg = server.ringAddLvl(ct5_pd1,0, ct5_pd1, 1)
+ct5_pd_agg = server.ringAddLvl(ct5_pd_agg,0, ct5_pd2, 2)
+
+
+# In[16]:
+
+
+dec_ct5 = server.decodeAfterPartialDecrypt(ct5_pd_agg)
+print(dec_ct5[:10])
+print(np.round(dec_ct5, 2)[:10])
+
+
+# In[18]:
+
+
+
+
+
+# In[31]:
+
+
+import math
+Scale = server.paramsLiteral.scale
+LogSlots = server.paramsLiteral.logSlots
+
+
+# In[36]:
+
+
+noise_budget = -math.log2(Scale)+(LogSlots)+8
+print("Noise Budget:", noise_budget)
+for i in range(4):
+    delta = dec_ct5[i] - np.round(dec_ct5[i], 2)
+    noise = math.log2(np.abs(delta))
+    if noise <= noise_budget:
+        print(i, "Pass.", 'Noise:', noise)
+    else:
+        print(i, "Fail.", 'Noise:', noise)
+
+
 # In[ ]:
 
 
