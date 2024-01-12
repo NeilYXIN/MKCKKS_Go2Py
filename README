@@ -1,3 +1,8 @@
+[To be updated]
+`go build -o mkckks.so -buildmode=c-shared export.go`
+
+
+
 This repository provides an implementation of the Multi-key Homomorphic Encryption scheme in (https://eprint.iacr.org/2022/347).
 This project was supported by Samsung Research, Samsung Electronics Co., Ltd.
 
