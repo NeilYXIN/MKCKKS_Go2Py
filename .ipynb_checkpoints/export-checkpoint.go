@@ -3,7 +3,7 @@ package main
 /*
 #include <stdbool.h>
 #include <stddef.h>
-// #include <complex.h>
+#include <complex.h>
 
 typedef struct {
 	double* data;
@@ -15,11 +15,11 @@ typedef struct {
 	size_t size;
 } Luint64;
 
-// // Message
-// typedef struct {
-// 	double complex* data;
-// 	size_t size;
-// } Message;
+// Message
+typedef struct {
+	double complex* data;
+	size_t size;
+} Message;
 
 // Params
 typedef struct {
@@ -105,6 +105,14 @@ typedef struct {
 	int idx;
 } MPHEServer;
 
+// MPHEClient
+typedef struct {
+	Params params;
+	Poly crs;
+	Poly secretKey;
+	Poly publicKey;
+	Poly decryptionKey;
+} MPHEClient;
 */
 import "C"
 import (
@@ -120,6 +128,33 @@ import (
 	"github.com/ldsec/lattigo/v2/utils"
 )
 
+type testParam struct {
+	params mkckks.Parameters
+	ringQ  *ring.Ring
+	ringP  *ring.Ring
+	prng   utils.PRNG
+	kgen   *mkrlwe.KeyGenerator
+
+	sk  *mkrlwe.SecretKey
+	pk  *mkrlwe.PublicKey
+	rlk *mkrlwe.RelinearizationKey
+	// rtk *mkrlwe.RotationKey
+	// cjk *mkrlwe.ConjugationKey
+
+	// skSet  *mkrlwe.SecretKeySet
+	// pkSet  *mkrlwe.PublicKeySet
+	// rlkSet *mkrlwe.RelinearizationKeySet
+	// rtkSet *mkrlwe.RotationKeySet
+	// cjkSet *mkrlwe.ConjugationKeySet
+	id string
+
+	encryptor *mkckks.Encryptor
+	decryptor *mkckks.Decryptor
+	evaluator *mkckks.Evaluator
+	// idset     *mkrlwe.IDSet
+}
+
+var N = 2
 var PN14QP439 = ckks.ParametersLiteral{
 	LogN:     14,
 	LogSlots: 13,
@@ -143,6 +178,51 @@ var PN14QP439 = ckks.ParametersLiteral{
 func newMPHEServer(user_idx C.int) *C.MPHEServer {
 	server := (*C.MPHEServer)(C.malloc(C.sizeof_MPHEServer))
 
+	// func genTestContext(user_id int) *testParams {
+	var (
+		// PN15QP880 = ckks.ParametersLiteral{
+		// 	LogN:     15,
+		// 	LogSlots: 14,
+		// 	//60 + 13x54
+		// 	Q: []uint64{
+		// 		0xfffffffff6a0001,
+
+		// 		0x3fffffffd60001, 0x3fffffffca0001,
+		// 		0x3fffffff6d0001, 0x3fffffff5d0001,
+		// 		0x3fffffff550001, 0x3fffffff390001,
+		// 		0x3fffffff360001, 0x3fffffff2a0001,
+		// 		0x3fffffff000001, 0x3ffffffefa0001,
+		// 		0x3ffffffef40001, 0x3ffffffed70001,
+		// 		0x3ffffffed30001,
+		// 	},
+		// 	P: []uint64{
+		// 		//59 x 2
+		// 		0x7ffffffffe70001, 0x7ffffffffe10001,
+		// 	},
+		// 	Scale: 1 << 54,
+		// 	Sigma: rlwe.DefaultSigma,
+		// }
+		PN14QP439 = ckks.ParametersLiteral{
+			LogN:     14,
+			LogSlots: 13,
+			Q: []uint64{
+				// 59 + 5x52
+				0x7ffffffffe70001,
+
+				0xffffffff00001, 0xfffffffe40001,
+				0xfffffffe20001, 0xfffffffbe0001,
+				0xfffffffa60001,
+			},
+			P: []uint64{
+				// 60 x 2
+				0xffffffffffc0001, 0xfffffffff840001,
+			},
+			Scale: 1 << 52,
+			Sigma: rlwe.DefaultSigma,
+		}
+	)
+
+	// defaultParam := []ckks.ParametersLiteral{PN14QP439}
 	PARAMSLITERAL := &[]ckks.ParametersLiteral{PN14QP439}[0] // hardcoded, assuming using one parameters lietral
 	server.paramsLiteral = *convParamsLiteral(PARAMSLITERAL)
 
@@ -162,6 +242,13 @@ func newMPHEServer(user_idx C.int) *C.MPHEServer {
 
 	kgen := mkckks.NewKeyGenerator(PARAMS)
 
+	// testContext.skSet = mkrlwe.NewSecretKeySet()
+
+	// testContext.pkSet = mkrlwe.NewPublicKeyKeySet()
+	// testContext.rlkSet = mkrlwe.NewRelinearizationKeyKeySet(defaultParam.Parameters)
+	// testContext.rtkSet = mkrlwe.NewRotationKeySet()
+	// testContext.cjkSet = mkrlwe.NewConjugationKeySet()
+
 	// gen sk, pk, rlk, rk
 	server.idx = user_idx // user_idx is C.int
 	// user_id := "user" + strconv.Itoa(int(server.idx))
@@ -172,6 +259,25 @@ func newMPHEServer(user_idx C.int) *C.MPHEServer {
 	server.sk = *convPolyQP(&sk.SecretKey.Value)
 	server.pk = *convPolyQPPair(pk.PublicKey.Value)
 
+	// r := kgen.GenSecretKey(user_id)
+	// rlk := kgen.GenRelinearizationKey(sk, r)
+
+	// server.rlk = // TODO: rlk
+
+	// userList := make([]string, maxUsers)
+	// idset := mkrlwe.NewIDSet()
+
+	// id := "user" + strconv.Itoa(user_id)
+
+	// // for i := range userList {
+	// // 	userList[i] = "user" + strconv.Itoa(i)
+	// // 	idset.Add(userList[i])
+	// // }
+
+	// var testContext *testParam
+	// if testContext, err = genTestParam(params, id); err != nil {
+	// 	panic(err)
+	// }
 	return server
 }
 
@@ -195,11 +301,29 @@ func encryptFromPk(pk *C.PolyQPPair, array *C.double, arraySize C.size_t, user_i
 
 	PARAMS := mkckks.NewParameters(ckksParams)
 
+	// server.params = *convParams(&PARAMS)
+
+	// kgen := mkckks.NewKeyGenerator(PARAMS)
+
+	// params := convCKKSParams(parms)
+	// encoder := ckks.NewEncoder(params)
+
+	// publicKey := ckks.NewPublicKey(params)
+
 	publicKey := mkrlwe.NewPublicKey(PARAMS.Parameters, strconv.Itoa(int(user_idx)))
 
+	// pk.Value[0] = params.RingQP().NewPoly()
+	// pk.Value[1] = params.RingQP().NewPoly()
+	// pk.ID = id
+	// publicKey.ID = strconv.Itoa(int(user_idx))
+
+	// publicKey := ckks.NewPublicKey(params)
 	pkPolyQP := convS2RingPolyQP(pk)
 	publicKey.Value[0] = pkPolyQP[0].CopyNew()
 	publicKey.Value[1] = pkPolyQP[1].CopyNew()
+
+	// publicKey.Set(convS2RingPoly(pk))
+	// encryptor := ckks.NewEncryptorFromPk(params, publicKey)
 
 	// Encrypt the array element-wise
 	size := int(arraySize)
@@ -210,10 +334,16 @@ func encryptFromPk(pk *C.PolyQPPair, array *C.double, arraySize C.size_t, user_i
 
 	for i, elem := range list {
 		val := complex(float64(elem), 0.0)
+		// val := complex(float64(elem), 0.0)
 		msg.Value[i] = val
+		// pt := encoder.EncodeNew([]complex128{val}, params.LogSlots())
+		// cts[i] = encryptor.EncryptNew(pt)
 	}
 	encryptor := mkckks.NewEncryptor(PARAMS)
+
 	cts = encryptor.EncryptMsgNew(msg, publicKey)
+
+	// return convData(cts)
 	return convCiphertext(cts)
 }
 
@@ -262,6 +392,7 @@ func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.in
 		panic(err)
 	}
 	PARAMS := mkckks.NewParameters(ckksParams)
+	// decryptor := mkckks.NewDecryptor(PARAMS)
 
 	ct1 := convMKCKKSCiphertext(op1)
 	ct2 := convMKCKKSCiphertext(op2)
@@ -270,6 +401,7 @@ func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.in
 
 	ret := ct1.CopyNew()
 
+	// ringQ := decryptor.ringQ
 	ringQ := PARAMS.RingQ()
 
 	level := ct1.Level()
@@ -286,7 +418,9 @@ func ringQAddLvl(op1 *C.Ciphertext, op1_id C.int, op2 *C.Ciphertext, op2_id C.in
 		delete(ret.Value, ct2_op_id)
 	}
 
+	// delete(ct.Value, id)
 	return convCiphertext(ret)
+
 }
 
 //export decodeAfterPartialDecrypt
@@ -338,6 +472,7 @@ func decodeAfterPartialDecrypt(ciphertext *C.Ciphertext) *C.Ldouble {
 	array.data = (*C.double)(&values[0])
 	array.size = C.size_t(len(values))
 	return array
+
 }
 
 //export addCTs
@@ -387,7 +522,176 @@ func multiplyCTConst(op1 *C.Ciphertext, op2 C.double) *C.Ciphertext {
 	return convCiphertext(ct)
 }
 
-func main() {}
+// func genTestParam(defaultParam mkckks.Parameters, user_id string) (testContext *testParam, err error) {
+
+// 	testContext = new(testParam)
+
+// 	testContext.params = defaultParam
+
+// 	kgen := mkckks.NewKeyGenerator(testContext.params)
+
+// 	// testContext.skSet = mkrlwe.NewSecretKeySet()
+
+// 	// testContext.pkSet = mkrlwe.NewPublicKeyKeySet()
+// 	// testContext.rlkSet = mkrlwe.NewRelinearizationKeyKeySet(defaultParam.Parameters)
+// 	// testContext.rtkSet = mkrlwe.NewRotationKeySet()
+// 	// testContext.cjkSet = mkrlwe.NewConjugationKeySet()
+
+// 	// gen sk, pk, rlk, rk
+// 	testContext.sk, testContext.pk = kgen.GenKeyPair(user_id)
+// 	r := testContext.kgen.GenSecretKey(user_id)
+// 	testContext.rlk = testContext.kgen.GenRelinearizationKey(testContext.sk, r)
+// 	//cjk := testContext.kgen.GenConjugationKey(sk)
+
+// 	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
+
+// 	// testContext.skSet.AddSecretKey(sk)
+// 	// testContext.pkSet.AddPublicKey(pk)
+// 	// testContext.rlkSet.AddRelinearizationKey(rlk)
+// 	//testContext.cjkSet.AddConjugationKey(cjk)
+
+// 	// for id := range idset.Value {
+// 	// 	sk, pk := testContext.kgen.GenKeyPair(id)
+// 	// 	r := testContext.kgen.GenSecretKey(id)
+// 	// 	rlk := testContext.kgen.GenRelinearizationKey(sk, r)
+// 	// 	//cjk := testContext.kgen.GenConjugationKey(sk)
+
+// 	// 	//testContext.kgen.GenDefaultRotationKeys(sk, testContext.rtkSet)
+
+// 	// 	testContext.skSet.AddSecretKey(sk)
+// 	// 	testContext.pkSet.AddPublicKey(pk)
+// 	// 	testContext.rlkSet.AddRelinearizationKey(rlk)
+// 	// 	//testContext.cjkSet.AddConjugationKey(cjk)
+
+// 	// }
+
+// 	testContext.ringQ = defaultParam.RingQ()
+
+// 	if testContext.prng, err = utils.NewPRNG(); err != nil {
+// 		return nil, err
+// 	}
+
+// 	testContext.encryptor = mkckks.NewEncryptor(testContext.params)
+// 	testContext.decryptor = mkckks.NewDecryptor(testContext.params)
+
+// 	testContext.evaluator = mkckks.NewEvaluator(testContext.params)
+
+// 	return testContext, nil
+
+// }
+
+func main() {
+	// // Get a random number between 0 and 99 inclusive.
+	// var maxUsers = flag.Int("n", 4, "maximum number of parties")
+
+	// var (
+	// 	PN15QP880 = ckks.ParametersLiteral{
+	// 		LogN:     15,
+	// 		LogSlots: 14,
+	// 		//60 + 13x54
+	// 		Q: []uint64{
+	// 			0xfffffffff6a0001,
+
+	// 			0x3fffffffd60001, 0x3fffffffca0001,
+	// 			0x3fffffff6d0001, 0x3fffffff5d0001,
+	// 			0x3fffffff550001, 0x3fffffff390001,
+	// 			0x3fffffff360001, 0x3fffffff2a0001,
+	// 			0x3fffffff000001, 0x3ffffffefa0001,
+	// 			0x3ffffffef40001, 0x3ffffffed70001,
+	// 			0x3ffffffed30001,
+	// 		},
+	// 		P: []uint64{
+	// 			//59 x 2
+	// 			0x7ffffffffe70001, 0x7ffffffffe10001,
+	// 		},
+	// 		Scale: 1 << 54,
+	// 		Sigma: rlwe.DefaultSigma,
+	// 	}
+	// 	PN14QP439 = ckks.ParametersLiteral{
+	// 		LogN:     14,
+	// 		LogSlots: 13,
+	// 		Q: []uint64{
+	// 			// 59 + 5x52
+	// 			0x7ffffffffe70001,
+
+	// 			0xffffffff00001, 0xfffffffe40001,
+	// 			0xfffffffe20001, 0xfffffffbe0001,
+	// 			0xfffffffa60001,
+	// 		},
+	// 		P: []uint64{
+	// 			// 60 x 2
+	// 			0xffffffffffc0001, 0xfffffffff840001,
+	// 		},
+	// 		Scale: 1 << 52,
+	// 		Sigma: rlwe.DefaultSigma,
+	// 	}
+	// )
+
+	// // defaultParams := []ckks.ParametersLiteral{PN14QP439, PN15QP880}
+	// defaultParams := []ckks.ParametersLiteral{PN14QP439, PN15QP880}
+
+	// for _, defaultParam := range defaultParams {
+	// 	ckksParams, err := ckks.NewParametersFromLiteral(defaultParam)
+
+	// 	if ckksParams.PCount() < 2 {
+	// 		continue
+	// 	}
+
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	params := mkckks.NewParameters(ckksParams)
+	// 	userList := make([]string, *maxUsers)
+	// 	idset := mkrlwe.NewIDSet()
+
+	// 	for i := range userList {
+	// 		userList[i] = "user" + strconv.Itoa(i)
+	// 		idset.Add(userList[i])
+	// 	}
+	// 	user_id := "user" + strconv.Itoa(1)
+	// 	var testContext *testParam
+	// 	if testContext, err = genTestParam(params, user_id); err != nil {
+	// 		panic(err)
+	// 	}
+
+	// 	// for numUsers := 2; numUsers <= *maxUsers; numUsers *= 2 {
+	// 	// 	// benchMulAndRelin(testContext, userList[:numUsers])
+	// 	// 	//benchMulAndRelinHoisted(testContext, userList[:numUsers], b)
+	// 	// 	//benchSquareHoisted(testContext, userList[:numUsers], b)
+	// 	// }
+
+	// 	/*
+
+	// 	   for numUsers := 2; numUsers <= maxUsers; numUsers *= 2 {
+	// 	       benchRotate(testContext, userList[:numUsers], b)
+	// 	   }
+
+	// 	*/
+
+	// }
+}
+
+// func newTestVectors(testContext *testParam, id string, a, b complex128) (msg *mkckks.Message, ciphertext *mkckks.Ciphertext) {
+
+// 	params := testContext.params
+// 	logSlots := testContext.params.LogSlots()
+
+// 	msg = mkckks.NewMessage(params)
+
+// 	for i := 0; i < 1<<logSlots; i++ {
+// 		msg.Value[i] = complex(utils.RandFloat64(real(a), real(b)), utils.RandFloat64(imag(a), imag(b)))
+// 	}
+
+// 	if testContext.encryptor != nil {
+// 		ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pk)
+// 		// ciphertext = testContext.encryptor.EncryptMsgNew(msg, testContext.pkSet.GetPublicKey(id))
+// 	} else {
+// 		panic("cannot newTestVectors: encryptor is not initialized!")
+// 	}
+
+// 	return msg, ciphertext
+// }
 
 /* HELPER: Conversion between C and Go structs */
 // *ckks.ParametersLiteral --> *C.ParametersLiteral
@@ -458,31 +762,31 @@ func convParamsLiteral(p *ckks.ParametersLiteral) *C.ParametersLiteral {
 // 	return p
 // }
 
-// /// Message
+/// Message
 
-// // mkckks.Message --> C.Message
-// func convMessage(msg mkckks.Message) C.Message {
-// 	list := (*C.Message)(C.malloc(C.sizeof_Message))
+// mkckks.Message --> C.Message
+func convMessage(msg mkckks.Message) C.Message {
+	list := (*C.Message)(C.malloc(C.sizeof_Message))
 
-// 	// for i, comp_val := range msg.Value {
-// 	// 	list.data
+	// for i, comp_val := range msg.Value {
+	// 	list.data
 
-// 	// }
+	// }
 
-// 	list.data = (*C.complexdouble)(&msg.Value[0])
-// 	list.size = C.size_t(len(msg.Value))
+	list.data = (*C.complexdouble)(&msg.Value[0])
+	list.size = C.size_t(len(msg.Value))
 
-// 	return *list
-// }
+	return *list
+}
 
-// // C.Message --> []complex128
-// func convMKCKKSMessage(list C.Message) *mkckks.Message {
-// 	ret := new(mkckks.Message)
-// 	size := int(list.size)
-// 	vals := (*[1 << 30]complex128)(unsafe.Pointer(list.data))[:size:size]
-// 	ret.Value = vals
-// 	return ret
-// }
+// C.Message --> []complex128
+func convMKCKKSMessage(list C.Message) *mkckks.Message {
+	ret := new(mkckks.Message)
+	size := int(list.size)
+	vals := (*[1 << 30]complex128)(unsafe.Pointer(list.data))[:size:size]
+	ret.Value = vals
+	return ret
+}
 
 /// Luint64
 

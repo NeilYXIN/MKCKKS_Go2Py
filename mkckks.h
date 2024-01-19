@@ -23,7 +23,7 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 #include <stdbool.h>
 #include <stddef.h>
-#include <complex.h>
+// #include <complex.h>
 
 typedef struct {
 	double* data;
@@ -35,11 +35,11 @@ typedef struct {
 	size_t size;
 } Luint64;
 
-// Message
-typedef struct {
-	double complex* data;
-	size_t size;
-} Message;
+// // Message
+// typedef struct {
+// 	double complex* data;
+// 	size_t size;
+// } Message;
 
 // Params
 typedef struct {
@@ -125,14 +125,6 @@ typedef struct {
 	int idx;
 } MPHEServer;
 
-// MPHEClient
-typedef struct {
-	Params params;
-	Poly crs;
-	Poly secretKey;
-	Poly publicKey;
-	Poly decryptionKey;
-} MPHEClient;
 
 #line 1 "cgo-generated-wrapper"
 
