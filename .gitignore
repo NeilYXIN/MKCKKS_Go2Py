@@ -21,3 +21,4 @@
 go.work
 .ipynb_checkpoints/
 *.so
+**.DS_Store
