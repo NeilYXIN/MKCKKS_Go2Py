@@ -23,23 +23,24 @@ Note: Our implementation considers encrypting double data type, you will need to
 - Go and cgo
 - Python and ctypes
 
-
 ## How to Use
 
 The C-style dll needs to be generated for different platforms, to generate your own dll, open a terminal at the root directory of this project and enter:
 
 `go build -o mkckks.so -buildmode=c-shared export.go`
 
-This generates a dll named mkckks.so from the export.go file. Please refer to the jupyter notebook tutorials.ipynb for details of how to import this dll in Python and perform HE operations. 
+This generates a dll named mkckks.so (for Linux & macOS, change into mkckks.dll for Windows) from the export.go file. Please refer to the jupyter notebook tutorials.ipynb for details of how to import this dll in Python and perform HE operations. 
 
+## Acknowledgement
+MKHE-KKLSS: https://github.com/SNUCP/MKHE-KKLSS
 
+Python Wrapper for Lattigo: https://github.com/chandra-gummaluru/FL-Development/tree/MPHE
 
 ## Instructions for the Golang Code Base:
 Source: [MKHE-KKLSS](https://github.com/SNUCP/MKHE-KKLSS)
 
 This repository provides an implementation of the Multi-key Homomorphic Encryption scheme in (https://eprint.iacr.org/2022/347).
 This project was supported by Samsung Research, Samsung Electronics Co., Ltd.
-
 
 ### LICENSE
 
