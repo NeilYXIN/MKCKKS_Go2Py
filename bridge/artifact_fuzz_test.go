@@ -8,6 +8,114 @@ import (
 	"testing"
 )
 
+// mutateSerializedSeed applies bounded structural mutations to a valid native
+// payload. Large []byte fuzz arguments can outgrow Go's fixed fuzz-worker
+// shared-memory transport before the target callback can reject them. Keeping
+// the valid payload in the target closure and fuzzing only fixed-width mutation
+// instructions reaches the semantic decoders without that framework failure.
+func mutateSerializedSeed(seed []byte, mutation uint8, offset, value uint64, span uint16) []byte {
+	data := append([]byte(nil), seed...)
+	switch mutation % 7 {
+	case 0: // Preserve a valid payload.
+		return data
+	case 1: // Overwrite one byte.
+		if len(data) == 0 {
+			return []byte{byte(value)}
+		}
+		data[int(offset%uint64(len(data)))] = byte(value)
+	case 2: // Overwrite a complete fixed-width field.
+		if len(data) < 8 {
+			return data[:0]
+		}
+		position := int(offset % uint64(len(data)-7))
+		binary.LittleEndian.PutUint64(data[position:], value)
+	case 3: // Truncate at any boundary, including zero or the full length.
+		return data[:int(offset%uint64(len(data)+1))]
+	case 4: // Delete a bounded range.
+		if len(data) == 0 {
+			return data
+		}
+		position := int(offset % uint64(len(data)))
+		count := 1 + int(span%256)
+		if remaining := len(data) - position; count > remaining {
+			count = remaining
+		}
+		copy(data[position:], data[position+count:])
+		data = data[:len(data)-count]
+	case 5: // Insert a bounded constant range.
+		position := int(offset % uint64(len(data)+1))
+		count := 1 + int(span%256)
+		originalLength := len(data)
+		data = append(data, make([]byte, count)...)
+		copy(data[position+count:], data[position:originalLength])
+		for index := position; index < position+count; index++ {
+			data[index] = byte(value)
+		}
+	case 6: // XOR a bounded range without changing its size.
+		if len(data) == 0 {
+			return data
+		}
+		position := int(offset % uint64(len(data)))
+		count := 1 + int(span%256)
+		if remaining := len(data) - position; count > remaining {
+			count = remaining
+		}
+		for index := position; index < position+count; index++ {
+			data[index] ^= byte(value)
+		}
+	}
+	return data
+}
+
+func TestMutateSerializedSeedBounded(t *testing.T) {
+	seed := make([]byte, 512)
+	for index := range seed {
+		seed[index] = byte(index)
+	}
+	original := string(seed)
+	tests := []struct {
+		name        string
+		mutation    uint8
+		offset      uint64
+		value       uint64
+		span        uint16
+		expectedLen int
+	}{
+		{name: "unchanged", mutation: 0, expectedLen: 512},
+		{name: "byte", mutation: 1, offset: 10, value: 0xff, expectedLen: 512},
+		{name: "uint64", mutation: 2, offset: 10, value: math.MaxUint64, expectedLen: 512},
+		{name: "truncate", mutation: 3, offset: 17, expectedLen: 17},
+		{name: "delete", mutation: 4, offset: 10, span: 9, expectedLen: 502},
+		{name: "insert", mutation: 5, offset: 10, value: 0xa5, span: 9, expectedLen: 522},
+		{name: "xor", mutation: 6, offset: 10, value: 0xff, span: 9, expectedLen: 512},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := mutateSerializedSeed(
+				seed,
+				test.mutation,
+				test.offset,
+				test.value,
+				test.span,
+			)
+			if len(mutated) != test.expectedLen {
+				t.Fatalf("length=%d, want %d", len(mutated), test.expectedLen)
+			}
+			if len(mutated) > len(seed)+256 {
+				t.Fatalf("bounded mutation grew from %d to %d bytes", len(seed), len(mutated))
+			}
+			if string(seed) != original {
+				t.Fatal("mutation changed its seed")
+			}
+		})
+	}
+	for mutation := uint8(0); mutation < 7; mutation++ {
+		if mutated := mutateSerializedSeed(nil, mutation, 0, 0, math.MaxUint16); len(mutated) > 256 {
+			t.Fatalf("empty-seed mutation %d produced %d bytes", mutation, len(mutated))
+		}
+	}
+}
+
 func FuzzDeserializeArtifact(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte("MKCKKSG2"))
@@ -64,11 +172,10 @@ func FuzzPlaintextPayload(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(seed)
-	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > 2<<20 {
-			t.Skip()
-		}
+	f.Add(uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(2), uint64(0), uint64(math.MaxUint64), uint16(0))
+	f.Fuzz(func(t *testing.T, mutation uint8, offset, value uint64, span uint16) {
+		data := mutateSerializedSeed(seed, mutation, offset, value, span)
 		_, _ = readPlaintextPayload(ctx, data)
 	})
 }
@@ -97,15 +204,15 @@ func FuzzCiphertextAndSharePayloads(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(uint8(0), cipherSeed)
-	f.Add(uint8(1), shareSeed)
-	f.Fuzz(func(t *testing.T, payloadKind uint8, data []byte) {
-		if len(data) > 4<<20 {
-			t.Skip()
-		}
+	f.Add(uint8(0), uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(1), uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(0), uint8(2), uint64(0), uint64(math.MaxUint64), uint16(0))
+	f.Fuzz(func(t *testing.T, payloadKind, mutation uint8, offset, value uint64, span uint16) {
 		if payloadKind&1 == 0 {
+			data := mutateSerializedSeed(cipherSeed, mutation, offset, value, span)
 			_, _ = readCipherPayload(ctx, data)
 		} else {
+			data := mutateSerializedSeed(shareSeed, mutation, offset, value, span)
 			_, _ = readSharePayload(ctx, data)
 		}
 	})
@@ -201,11 +308,10 @@ func FuzzPublicKeyPayload(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(seed)
-	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > 8<<20 {
-			t.Skip()
-		}
+	f.Add(uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(2), uint64(0), uint64(math.MaxUint64), uint16(0))
+	f.Fuzz(func(t *testing.T, mutation uint8, offset, value uint64, span uint16) {
+		data := mutateSerializedSeed(seed, mutation, offset, value, span)
 		_, _ = readPublicKeyPayload(ctx, data)
 	})
 }
@@ -220,11 +326,10 @@ func FuzzPrivatePartyPayload(f *testing.F) {
 	if err != nil {
 		f.Fatal(err)
 	}
-	f.Add(seed)
-	f.Fuzz(func(t *testing.T, data []byte) {
-		if len(data) > 16<<20 {
-			t.Skip()
-		}
+	f.Add(uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(2), uint64(0), uint64(math.MaxUint64), uint16(0))
+	f.Fuzz(func(t *testing.T, mutation uint8, offset, value uint64, span uint16) {
+		data := mutateSerializedSeed(seed, mutation, offset, value, span)
 		_, _ = readPartyPayload(ctx, data)
 	})
 }
@@ -245,15 +350,15 @@ func FuzzEvaluationKeyPayloads(f *testing.F) {
 	}
 	contributionSeed, _ := writeEvalContributionPayload(contribution)
 	keysetSeed, _ := writeEvalSetPayload(keyset)
-	f.Add(uint8(0), contributionSeed)
-	f.Add(uint8(1), keysetSeed)
-	f.Fuzz(func(t *testing.T, payloadKind uint8, data []byte) {
-		if len(data) > 64<<20 {
-			t.Skip()
-		}
+	f.Add(uint8(0), uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(1), uint8(0), uint64(0), uint64(0), uint16(0))
+	f.Add(uint8(0), uint8(2), uint64(0), uint64(math.MaxUint64), uint16(0))
+	f.Fuzz(func(t *testing.T, payloadKind, mutation uint8, offset, value uint64, span uint16) {
 		if payloadKind&1 == 0 {
+			data := mutateSerializedSeed(contributionSeed, mutation, offset, value, span)
 			_, _ = readEvalContributionPayload(ctx, data)
 		} else {
+			data := mutateSerializedSeed(keysetSeed, mutation, offset, value, span)
 			_, _ = readEvalSetPayload(ctx, data)
 		}
 	})

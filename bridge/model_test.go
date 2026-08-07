@@ -1279,6 +1279,34 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		if _, readErr = deserializePoly([]byte("not-a-polynomial")); readErr == nil {
 			t.Fatal("malformed polynomial bytes were accepted")
 		}
+		validPolyBytes, marshalErr := serializePoly(share.deltas[0])
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, readErr = deserializePoly(validPolyBytes); readErr != nil {
+			t.Fatalf("valid polynomial bytes were rejected: %v", readErr)
+		}
+		polyHeaderCases := []struct {
+			name string
+			data []byte
+		}{
+			{name: "empty", data: nil},
+			{name: "truncated header", data: []byte{14, 1, 0}},
+			{name: "log n below context minimum", data: []byte{3, 1, 0, 0}},
+			{name: "log n above context maximum", data: []byte{21, 1, 0, 0}},
+			{name: "zero moduli", data: []byte{14, 0, 0, 0}},
+			{name: "invalid ntt flag", data: []byte{14, 1, 2, 0}},
+			{name: "invalid montgomery flag", data: []byte{14, 1, 0, 2}},
+			{name: "truncated coefficients", data: []byte{14, 1, 0, 0}},
+			{name: "declared size above artifact limit", data: []byte{20, 255, 0, 0}},
+		}
+		for _, test := range polyHeaderCases {
+			t.Run(test.name, func(t *testing.T) {
+				if _, err := deserializePoly(test.data); err == nil {
+					t.Fatal("malformed polynomial header was accepted")
+				}
+			})
+		}
 		if _, readErr = decodeLengthPrefixed(bytes.NewReader([]byte{0, 1}), 16); readErr == nil {
 			t.Fatal("truncated length prefix was accepted")
 		}

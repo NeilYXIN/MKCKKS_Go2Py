@@ -1,0 +1,6 @@
+go test fuzz v1
+byte('\r')
+byte('d')
+uint64(48)
+uint64(0)
+uint16(85)
