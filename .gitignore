@@ -22,3 +22,16 @@ go.work
 .ipynb_checkpoints/
 *.so
 **.DS_Store
+.venv/
+.uv-cache/
+build/
+dist/
+_skbuild/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+benchmark-results/

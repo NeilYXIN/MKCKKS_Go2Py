@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+title: MKCKKS Go2Py
+message: Please cite both this wrapper and the KKLSS multi-key homomorphic encryption paper.
+type: software
+version: 0.2.0
+license:
+  - MIT
+  - CC-BY-NC-2.0
+repository-code: https://github.com/NeilYXIN/MKCKKS_Go2Py
+authors:
+  - name: UofA Sustainable Computing Research Group
+preferred-citation:
+  type: article
+  title: Asymptotically Faster Multi-Key Homomorphic Encryption from Homomorphic Gadget Decomposition
+  authors:
+    - given-names: Taechan
+      family-names: Kim
+    - given-names: Hyesun
+      family-names: Kwak
+    - given-names: Dongwon
+      family-names: Lee
+    - given-names: Jinyeong
+      family-names: Seo
+    - given-names: Yongsoo
+      family-names: Song
+  year: 2023
+  url: https://eprint.iacr.org/2022/347
+references:
+  - type: software
+    title: MKHE-KKLSS
+    version: 13fed55fd28270fb4345dd532da24b323ebc5ce3
+    repository-code: https://github.com/SNUCP/MKHE-KKLSS
+    authors:
+      - name: SNUCP/MKHE-KKLSS contributors

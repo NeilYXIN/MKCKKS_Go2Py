@@ -1,0 +1,112 @@
+[build-system]
+requires = ["scikit-build-core>=1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "mkckks-go2py"
+version = "0.2.0"
+description = "NumPy-first Python bindings for the MKHE-KKLSS multi-key CKKS research implementation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT AND CC-BY-NC-2.0"
+license-files = ["LICENSE", "LICENSES/*", "NOTICE"]
+authors = [{name = "UofA Sustainable Computing Research Group"}]
+dependencies = ["numpy>=1.26"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Security :: Cryptography",
+]
+
+[project.urls]
+Repository = "https://github.com/NeilYXIN/MKCKKS_Go2Py"
+Issues = "https://github.com/NeilYXIN/MKCKKS_Go2Py/issues"
+Documentation = "https://github.com/NeilYXIN/MKCKKS_Go2Py/tree/main/docs"
+Changelog = "https://github.com/NeilYXIN/MKCKKS_Go2Py/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+  "hypothesis>=6.100",
+  "mypy>=1.10",
+  "pip-audit>=2.9",
+  "pytest>=8.2",
+  "pytest-cov>=5",
+  "reuse>=5.0",
+  "ruff>=0.6",
+]
+notebook = ["jupyter>=1.0", "nbclient>=0.10"]
+benchmark = ["pyperf>=2.7", "psutil>=6"]
+release = ["cibuildwheel>=3.2", "cyclonedx-bom>=7.0", "delocate>=0.12"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.20"
+wheel.packages = ["src/mkckks"]
+wheel.py-api = "py3"
+sdist.include = [
+  "abi/**",
+  "bridge/**",
+  "docs/**",
+  "examples/*.py",
+  "mkckks/**",
+  "mkrlwe/**",
+  "scripts/**",
+  "CHANGELOG.md",
+  "CITATION.cff",
+  "CMakeLists.txt",
+  "CONTRIBUTING.md",
+  "LICENSE",
+  "LICENSES/**",
+  "NOTICE",
+  "README.md",
+  "REUSE.toml",
+  "go.mod",
+  "go.sum",
+  "UPSTREAM.lock",
+]
+sdist.exclude = [
+  ".pytest_cache",
+  "**/__pycache__/**",
+  "**/__pycache__",
+  "**/*.pyc",
+  "**/*.pyo",
+  ".pytest_cache/**",
+  "benchmark-results/**",
+  "cnn/**",
+  "mkbfv/**",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+  "slow: exercises full cryptographic parameter sets",
+  "release: exercises the high-cost v0.2 release correctness matrix",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/mkckks"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["mkckks"]
