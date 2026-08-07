@@ -2,6 +2,9 @@
 
 ## 0.2.0 (release candidate)
 
+- Scoped the expensive generated-circuit counts to their intended Go and
+  Python release steps and raised the uncached Go release-test timeout, avoiding
+  duplicate heavy coverage execution without reducing the 400-circuit matrix.
 - Corrected the preferred software citation to the MASER publication describing
   the Python wrapper while retaining the upstream KKLSS algorithm citation as a
   separate provenance reference.
