@@ -176,7 +176,8 @@ jobs:
             PATH=/usr/local/go/bin:$PATH
             SOURCE_DATE_EPOCH=1704067200
           CIBW_TEST_COMMAND: python {project}/scripts/wheel_smoke.py
-      - run: uv run auditwheel show wheel-a/*.whl
+      - name: Inspect manylinux wheel dependencies
+        run: uv run --locked --group release auditwheel show wheel-a/*.whl
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: manylinux-wheel

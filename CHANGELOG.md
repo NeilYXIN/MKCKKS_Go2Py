@@ -2,6 +2,8 @@
 
 ## 0.2.0 (release candidate)
 
+- Added the locked `auditwheel` release dependency used to inspect manylinux
+  wheels in the release-candidate workflow.
 - Reworked large-artifact fuzz targets to use bounded structure-aware mutation
   instructions, preventing Go fuzz-worker shared-memory overflow without
   shortening fuzz duration or bypassing native payload decoders.

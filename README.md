@@ -9,11 +9,6 @@ A NumPy-first Python binding for the multi-key CKKS research implementation
 > available under MIT and CC BY-NC 2.0 and is therefore noncommercial
 > source-available software, not currently OSI-approved open source.
 
-The codebase is a v0.2 release candidate. It should be published only from a
-commit for which both the `CI` and manually dispatched `Release candidate`
-GitHub Actions workflows pass. A green local test run alone does not certify
-the macOS arm64/x86_64 and manylinux release artifacts.
-
 ## What this project does
 
 CKKS is an approximate homomorphic-encryption scheme: it packs real or complex
@@ -68,8 +63,8 @@ release decisions.
 
 v0.2 is distributed through
 [GitHub Releases](https://github.com/NeilYXIN/MKCKKS_Go2Py/releases) rather than
-PyPI. After the release-candidate workflow succeeds, download the wheel matching
-your platform and install it into a Python 3.11–3.14 environment:
+PyPI. Download the wheel matching your platform and install it into a Python
+3.11–3.14 environment:
 
 ```console
 python -m pip install /path/to/downloaded-wheel.whl
@@ -90,8 +85,7 @@ uv sync --all-groups
 
 `uv sync --all-groups` creates `.venv` under the repository. See the
 [development guide](docs/development.md) for Linux setup and verification
-commands. Release artifacts do not exist until the draft prerelease has passed
-its platform workflows and has been reviewed and published by the maintainer.
+commands.
 
 ## Quick start
 
