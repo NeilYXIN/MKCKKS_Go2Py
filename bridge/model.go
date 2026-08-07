@@ -1206,7 +1206,44 @@ func participantIDs(ciphertext *nativeCiphertext) []string {
 
 func serializePoly(poly *ring.Poly) ([]byte, error) { return poly.MarshalBinary() }
 
+func validateSerializedPoly(data []byte) error {
+	const headerSize = uint64(4)
+	if len(data) < int(headerSize) {
+		return fmt.Errorf("invalid polynomial encoding: truncated header")
+	}
+	logN := data[0]
+	if logN < 4 || logN > 20 {
+		return fmt.Errorf("invalid polynomial encoding: log_n %d is outside [4, 20]", logN)
+	}
+	modulusCount := uint64(data[1])
+	if modulusCount == 0 {
+		return fmt.Errorf("invalid polynomial encoding: modulus count is zero")
+	}
+	if data[2] > 1 || data[3] > 1 {
+		return fmt.Errorf("invalid polynomial encoding: Boolean flags must be 0 or 1")
+	}
+	coefficientCount := (uint64(1) << logN) * modulusCount
+	expectedLength := headerSize + coefficientCount*8
+	if expectedLength > maxArtifactSize {
+		return fmt.Errorf("invalid polynomial encoding: declared size exceeds artifact limit")
+	}
+	if uint64(len(data)) != expectedLength {
+		return fmt.Errorf(
+			"invalid polynomial encoding: length %d does not match declared length %d",
+			len(data),
+			expectedLength,
+		)
+	}
+	return nil
+}
+
 func deserializePoly(data []byte) (*ring.Poly, error) {
+	// Lattigo v2.3.0's decoder indexes the four-byte header before validating
+	// its length. Validate the complete allocation shape here so malformed
+	// artifacts cannot panic or induce an oversized allocation upstream.
+	if err := validateSerializedPoly(data); err != nil {
+		return nil, err
+	}
 	poly := new(ring.Poly)
 	if err := poly.UnmarshalBinary(data); err != nil {
 		return nil, err

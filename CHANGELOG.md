@@ -2,6 +2,12 @@
 
 ## 0.2.0 (release candidate)
 
+- Reworked large-artifact fuzz targets to use bounded structure-aware mutation
+  instructions, preventing Go fuzz-worker shared-memory overflow without
+  shortening fuzz duration or bypassing native payload decoders.
+- Reject malformed native polynomial headers before entering the pinned
+  upstream decoder, closing a fuzz-discovered panic path while keeping upstream
+  source unchanged.
 - Scoped the expensive generated-circuit counts to their intended Go and
   Python release steps and raised the uncached Go release-test timeout, avoiding
   duplicate heavy coverage execution without reducing the 400-circuit matrix.
