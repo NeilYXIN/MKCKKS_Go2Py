@@ -43,7 +43,12 @@ dev = [
 ]
 notebook = ["jupyter>=1.0", "nbclient>=0.10"]
 benchmark = ["pyperf>=2.7", "psutil>=6"]
-release = ["cibuildwheel>=3.2", "cyclonedx-bom>=7.0", "delocate>=0.12"]
+release = [
+  "auditwheel>=6.0",
+  "cibuildwheel>=3.2",
+  "cyclonedx-bom>=7.0",
+  "delocate>=0.12",
+]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
