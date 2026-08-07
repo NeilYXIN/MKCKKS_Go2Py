@@ -9,8 +9,15 @@ The Python package, native bridge, build system, tests, examples, and project
 documentation are Copyright (c) 2024-2026 UofA Sustainable Computing Research
 Group and contributors and are licensed under the MIT License.
 
-Upstream project: https://github.com/SNUCP/MKHE-KKLSS
-Paper: https://eprint.iacr.org/2022/347
+Python-wrapper publication:
+Abdullah Al Omar, Xin Yang, Euijin Choo, and Omid Ardakanian,
+"MASER: Efficient Privacy-Preserving Cross-Silo Federated Learning with
+Multi-Key Homomorphic Encryption," 2025 IEEE International Conference on Big
+Data (BigData), pp. 3472-3481, 2025.
+https://doi.org/10.1109/BIGDATA66926.2025.11401805
+
+Underlying implementation: https://github.com/SNUCP/MKHE-KKLSS
+Underlying algorithm paper: https://eprint.iacr.org/2022/347
 
 The combined distribution is source-available for noncommercial research. It
 is not currently an OSI-approved open-source distribution and has not been

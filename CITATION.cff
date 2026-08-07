@@ -1,6 +1,9 @@
 cff-version: 1.2.0
 title: MKCKKS Go2Py
-message: Please cite both this wrapper and the KKLSS multi-key homomorphic encryption paper.
+message: >-
+  If you use this Python wrapper, please cite the MASER paper. Please also cite
+  the KKLSS paper when your work relies on the underlying multi-key CKKS
+  algorithm.
 type: software
 version: 0.2.0
 license:
@@ -8,23 +11,27 @@ license:
   - CC-BY-NC-2.0
 repository-code: https://github.com/NeilYXIN/MKCKKS_Go2Py
 authors:
-  - name: UofA Sustainable Computing Research Group
+  - given-names: Xin
+    family-names: Yang
+    affiliation: University of Alberta
 preferred-citation:
-  type: article
-  title: Asymptotically Faster Multi-Key Homomorphic Encryption from Homomorphic Gadget Decomposition
+  type: conference-paper
+  title: "MASER: Efficient Privacy-Preserving Cross-Silo Federated Learning with Multi-Key Homomorphic Encryption"
   authors:
-    - given-names: Taechan
-      family-names: Kim
-    - given-names: Hyesun
-      family-names: Kwak
-    - given-names: Dongwon
-      family-names: Lee
-    - given-names: Jinyeong
-      family-names: Seo
-    - given-names: Yongsoo
-      family-names: Song
-  year: 2023
-  url: https://eprint.iacr.org/2022/347
+    - given-names: Abdullah
+      family-names: Al Omar
+    - given-names: Xin
+      family-names: Yang
+    - given-names: Euijin
+      family-names: Choo
+    - given-names: Omid
+      family-names: Ardakanian
+  year: 2025
+  collection-title: 2025 IEEE International Conference on Big Data (BigData)
+  start: 3472
+  end: 3481
+  doi: 10.1109/BIGDATA66926.2025.11401805
+  url: https://ieeexplore.ieee.org/document/11401805
 references:
   - type: software
     title: MKHE-KKLSS
@@ -32,3 +39,21 @@ references:
     repository-code: https://github.com/SNUCP/MKHE-KKLSS
     authors:
       - name: SNUCP/MKHE-KKLSS contributors
+  - type: conference-paper
+    title: Asymptotically Faster Multi-Key Homomorphic Encryption from Homomorphic Gadget Decomposition
+    authors:
+      - given-names: Taechan
+        family-names: Kim
+      - given-names: Hyesun
+        family-names: Kwak
+      - given-names: Dongwon
+        family-names: Lee
+      - given-names: Jinyeong
+        family-names: Seo
+      - given-names: Yongsoo
+        family-names: Song
+    year: 2023
+    collection-title: Proceedings of the 2023 ACM SIGSAC Conference on Computer and Communications Security
+    start: 726
+    end: 740
+    url: https://eprint.iacr.org/2022/347
