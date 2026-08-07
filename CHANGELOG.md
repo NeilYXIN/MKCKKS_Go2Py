@@ -2,6 +2,9 @@
 
 ## 0.2.0 (release candidate)
 
+- Corrected the preferred software citation to the MASER publication describing
+  the Python wrapper while retaining the upstream KKLSS algorithm citation as a
+  separate provenance reference.
 - Raised observed Go bridge-core coverage above 95% with focused artifact
   validation and failure-atomicity tests; CI enforces a 93% maintenance floor.
 - Made release-candidate versioning derive directly from `pyproject.toml`.

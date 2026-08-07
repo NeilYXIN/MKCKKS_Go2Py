@@ -210,6 +210,28 @@ The upstream `cnn` test currently has a pre-existing compile error at the
 pinned commit; this is recorded in `baseline/environment.json` and is not
 silently patched.
 
+## Citation
+
+If you use this Python wrapper, please cite the publication that describes its
+use in the MASER privacy-preserving federated-learning system:
+
+```bibtex
+@inproceedings{AlOmar2025MASER,
+  author    = {{Al Omar}, Abdullah and Yang, Xin and Choo, Euijin and Ardakanian, Omid},
+  title     = {{MASER}: Efficient Privacy-Preserving Cross-Silo Federated Learning with Multi-Key Homomorphic Encryption},
+  booktitle = {2025 IEEE International Conference on Big Data (BigData)},
+  year      = {2025},
+  pages     = {3472--3481},
+  doi       = {10.1109/BIGDATA66926.2025.11401805}
+}
+```
+
+The machine-readable citation is in [CITATION.cff](CITATION.cff). Work relying
+on the underlying multi-key CKKS construction should also cite the original
+[KKLSS paper](https://eprint.iacr.org/2022/347). The wrapper publication and
+the upstream algorithm citation describe different contributions; neither
+replaces the other.
+
 ## Improvements over the original wrapper
 
 Compared with the legacy implementation at commit
