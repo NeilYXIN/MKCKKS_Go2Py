@@ -1,0 +1,17 @@
+MKCKKS Go2Py contains two separately licensed bodies of work.
+
+The directories cnn/, mkbfv/, mkckks/, and mkrlwe/, and the upstream module
+metadata in go.mod, are vendored without functional modification from
+SNUCP/MKHE-KKLSS commit 13fed55fd28270fb4345dd532da24b323ebc5ce3 and are
+licensed under Creative Commons Attribution-NonCommercial 2.0.
+
+The Python package, native bridge, build system, tests, examples, and project
+documentation are Copyright (c) 2024-2026 UofA Sustainable Computing Research
+Group and contributors and are licensed under the MIT License.
+
+Upstream project: https://github.com/SNUCP/MKHE-KKLSS
+Paper: https://eprint.iacr.org/2022/347
+
+The combined distribution is source-available for noncommercial research. It
+is not currently an OSI-approved open-source distribution and has not been
+independently audited for production cryptographic use.

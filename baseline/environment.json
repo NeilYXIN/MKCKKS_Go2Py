@@ -1,0 +1,22 @@
+{
+  "purpose": "Local development provenance only; this is not release certification.",
+  "captured_at": "2026-08-06",
+  "platform": "macOS-26.6-25G72-arm64",
+  "python_system": "3.9.6",
+  "python_development": "3.12",
+  "uv": "0.12.2",
+  "go": "1.26.5",
+  "clang": "Apple clang 21.0.0 (clang-2100.1.1.101), target arm64-apple-darwin25.6.0",
+  "toolchain_selection": "Go 1.26.5 was the newest available release and passed the unchanged mkckks, mkrlwe, and mkbfv suites; no older fallback was needed.",
+  "upstream_commit": "13fed55fd28270fb4345dd532da24b323ebc5ce3",
+  "upstream_tests": {
+    "mkckks": "pass",
+    "mkrlwe": "pass",
+    "mkbfv": "pass",
+    "cnn": "pre-existing compile failure: cnn_test.go calls NewRelinearizationKeyKeySet without required parameters"
+  },
+  "upstream_vet": {
+    "bridge_mkckks_mkrlwe": "pass",
+    "mkbfv": "pre-existing diagnostics: unreachable code in params.go and unkeyed rlwe.RingQP dependency struct literals"
+  }
+}

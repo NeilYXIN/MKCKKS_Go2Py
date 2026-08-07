@@ -13,10 +13,9 @@ import (
 	"github.com/ldsec/lattigo/v2/rlwe"
 	"github.com/ldsec/lattigo/v2/utils"
 
+	"github.com/stretchr/testify/require"
 	"math"
 	"math/cmplx"
-
-	"github.com/stretchr/testify/require"
 )
 
 var maxUsers = flag.Int("n", 4, "maximum number of parties")
@@ -150,8 +149,6 @@ func genTestParams(defaultParam Parameters, idset *mkrlwe.IDSet) (testContext *t
 	// gen sk, pk, rlk, rk
 
 	for id := range idset.Value {
-		fmt.Print("id is ", id)
-
 		sk, pk := testContext.kgen.GenKeyPair(id)
 		r := testContext.kgen.GenSecretKey(id)
 		rlk := testContext.kgen.GenRelinearizationKey(sk, r)

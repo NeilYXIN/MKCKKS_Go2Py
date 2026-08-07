@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "abi_version": 1,
+  "symbols": {
+    "mkckks_v1_abi_version": {"success": ["returns 1"], "failure": []},
+    "mkckks_v1_add": {"success": ["decrypts to clear sum"], "failure": ["wrong-kind handle", "failure atomicity"]},
+    "mkckks_v1_add_plaintext": {"success": ["decrypts to clear difference"], "failure": ["native validation suite"]},
+    "mkckks_v1_add_scalar": {"success": ["decrypts to clear complex sum"], "failure": ["native validation suite"]},
+    "mkckks_v1_buffer_free": {"success": ["releases serialized and metadata buffers"], "failure": []},
+    "mkckks_v1_build_info": {"success": ["returns nonempty build JSON"], "failure": ["native validation suite"]},
+    "mkckks_v1_cipher_metadata": {"success": ["returns ciphertext metadata"], "failure": ["native validation suite"]},
+    "mkckks_v1_collective_decrypt": {"success": ["decrypts every operational result"], "failure": ["missing share", "null output", "failure atomicity", "post-failure usability"]},
+    "mkckks_v1_conjugate": {"success": ["decrypts to clear conjugate"], "failure": ["missing key", "invalid level", "failure atomicity"]},
+    "mkckks_v1_context_create": {"success": ["creates PN14 context"], "failure": ["null output", "failure atomicity"]},
+    "mkckks_v1_context_info": {"success": ["returns nonempty context JSON"], "failure": ["native validation suite"]},
+    "mkckks_v1_drop_level": {"success": ["decrypts unchanged clear value"], "failure": ["native validation suite"]},
+    "mkckks_v1_encode_plaintext": {"success": ["plaintext used by add and multiply"], "failure": ["native validation suite"]},
+    "mkckks_v1_encrypt": {"success": ["private and public encryption decrypt correctly"], "failure": ["invalid flag", "non-finite input", "failure atomicity"]},
+    "mkckks_v1_error_free": {"success": ["releases every returned diagnostic"], "failure": []},
+    "mkckks_v1_evaluation_keys_combine": {"success": ["combines full and empty contributions"], "failure": ["native validation suite"]},
+    "mkckks_v1_export_artifact": {"success": ["exports ciphertext artifact"], "failure": ["native validation suite"]},
+    "mkckks_v1_import_artifact": {"success": ["round-trip decrypts correctly"], "failure": ["malformed artifact", "failure atomicity"]},
+    "mkckks_v1_live_handles": {"success": ["returns to zero after suite"], "failure": []},
+    "mkckks_v1_multiply": {"success": ["decrypts to clear ciphertext product"], "failure": ["missing key", "failure atomicity"]},
+    "mkckks_v1_multiply_plaintext": {"success": ["decrypts to clear plaintext product"], "failure": ["native validation suite"]},
+    "mkckks_v1_multiply_scalar": {"success": ["integer and complex results decrypt correctly"], "failure": ["non-finite scalar", "failure atomicity"]},
+    "mkckks_v1_object_metadata": {"success": ["returns plaintext metadata"], "failure": ["null output", "failure atomicity"]},
+    "mkckks_v1_partial_decrypt": {"success": ["share used for every operational result"], "failure": ["native validation suite"]},
+    "mkckks_v1_party_evaluation_keys": {"success": ["full and empty contributions"], "failure": ["native validation suite"]},
+    "mkckks_v1_party_generate": {"success": ["creates party"], "failure": ["native validation suite"]},
+    "mkckks_v1_party_public_key": {"success": ["public encryption decrypts correctly"], "failure": ["native validation suite"]},
+    "mkckks_v1_release": {"success": ["releases all handles"], "failure": ["stale handle", "no live-handle delta"]},
+    "mkckks_v1_rescale": {"success": ["decrypts unchanged clear product"], "failure": ["exhausted threshold", "precision floor", "failure atomicity"]},
+    "mkckks_v1_rotate": {"success": ["decrypts to clear slot rotation"], "failure": ["missing key", "failure atomicity"]},
+    "mkckks_v1_subtract": {"success": ["decrypts to clear difference"], "failure": ["native validation suite"]}
+  }
+}
+

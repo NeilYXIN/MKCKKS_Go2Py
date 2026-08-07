@@ -1,11 +1,7 @@
 package mkckks
 
-import (
-	"mk-lattigo/mkrlwe"
-
-	"github.com/ldsec/lattigo/v2/ckks"
-	"github.com/ldsec/lattigo/v2/ring"
-)
+import "github.com/ldsec/lattigo/v2/ckks"
+import "mk-lattigo/mkrlwe"
 
 type Decryptor struct {
 	*mkrlwe.Decryptor
@@ -27,24 +23,9 @@ func NewDecryptor(params Parameters) *Decryptor {
 	return ret
 }
 
-// PtxtPool returns the ptxtPool
-func (dec *Decryptor) PtxtPool() *ckks.Plaintext {
-	return dec.ptxtPool
-}
-
-// RingQ returns the Decryptor.RingQ()
-func (dec *Decryptor) RingQ() *ring.Ring {
-	return dec.Decryptor.RingQ()
-}
-
 // PartialDecrypt partially decrypts the ct with single secretkey sk and update result inplace
 func (dec *Decryptor) PartialDecrypt(ct *Ciphertext, sk *mkrlwe.SecretKey) {
 	dec.Decryptor.PartialDecrypt(ct.Ciphertext, sk)
-}
-
-// MyPartialDecrypt partially decrypts the ct with single secretkey sk and update result in ct.Value[id]
-func (dec *Decryptor) MyPartialDecrypt(ct *Ciphertext, sk *mkrlwe.SecretKey) {
-	dec.Decryptor.MyPartialDecrypt(ct.Ciphertext, sk)
 }
 
 // Decrypt decrypts the ciphertext with given secretkey set and write the result in ptOut.
@@ -59,9 +40,4 @@ func (dec *Decryptor) Decrypt(ciphertext *Ciphertext, skSet *mkrlwe.SecretKeySet
 	msg.Value = dec.encoder.Decode(dec.ptxtPool, dec.params.logSlots)
 
 	return
-}
-
-// Wrapper for dec.encoder.Decode(plaintext), return message.Value ([] complex128)
-func (dec *Decryptor) Decode(plaintext *ckks.Plaintext) []complex128 {
-	return dec.encoder.Decode(dec.ptxtPool, dec.params.logSlots)
 }

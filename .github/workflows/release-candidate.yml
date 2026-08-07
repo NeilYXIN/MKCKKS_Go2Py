@@ -1,0 +1,252 @@
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Commit, tag, or branch to certify
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  release-verification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    outputs:
+      commit: ${{ steps.release-commit.outputs.commit }}
+      version: ${{ steps.release-version.outputs.version }}
+    env:
+      MKCKKS_CIRCUIT_COUNT_PN14: "250"
+      MKCKKS_CIRCUIT_COUNT_PN15: "150"
+      MKCKKS_OPERATION_PAIR_LIMIT: "144"
+      MKCKKS_FAILURE_DIR: release-assets/failures
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target }}
+      - name: Freeze release commit
+        id: release-commit
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Read release version
+        id: release-version
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version: 1.26.5
+          cache-dependency-path: go.sum
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.12.2
+          enable-cache: true
+      - run: uv sync --locked --all-groups
+      - run: uv run python scripts/verify_upstream.py
+      - run: go test ./mkckks ./mkrlwe ./mkbfv ./bridge
+      - run: go vet ./bridge ./mkckks ./mkrlwe
+      - run: go test -race -run 'Test(WorkerAndConcurrentOperationMatrix|ConcurrentEvaluationKeyUse|RegistryRejectsStaleHandles)$' ./bridge
+      - run: bash scripts/check_go_coverage.sh
+      - run: uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
+      - run: uv run pytest tests/test_release_correctness.py tests/test_correctness_certification.py -m release
+      - name: Preserve generated-circuit failure records
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: correctness-failures
+          path: release-assets/failures
+          if-no-files-found: ignore
+      - run: bash scripts/test_c_abi.sh
+      - run: uv run python scripts/verify_abi_symbols.py
+      - name: Static quality, notebook, and distributed example
+        run: |
+          uv run ruff format --check src tests scripts examples benchmarks
+          uv run ruff check src tests scripts examples benchmarks
+          uv run mypy src/mkckks examples/comprehensive.py scripts/generate_compatibility_bundle.py scripts/write_correctness_report.py
+          uv run reuse lint
+          uv run jupyter nbconvert --to notebook --execute tutorial.ipynb --output-dir /tmp --output tutorial-executed.ipynb
+          uv run python examples/distributed.py
+      - name: Replay corpora and focused fuzzing
+        run: |
+          go test -run '^$' -fuzz '^FuzzDeserializeArtifact$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzArtifactEnvelopeWithValidChecksum$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzParameterLiteral$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzPlaintextPayload$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzCiphertextAndSharePayloads$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzCorrectnessTrackingPayloads$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzPublicKeyPayload$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzPrivatePartyPayload$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzEvaluationKeyPayloads$' -fuzztime 15s ./bridge
+          go test -run '^$' -fuzz '^FuzzRegistryHandleSequences$' -fuzztime 15s ./bridge
+      - name: 10,000-cycle lifecycle and retained-memory soak
+        run: uv run pytest tests/test_public_contract.py -k handle_stress
+        env:
+          MKCKKS_STRESS_CYCLES: "10000"
+      - name: Generate correctness, compatibility, and benchmark evidence
+        run: |
+          mkdir -p release-assets/reports
+          uv run python scripts/write_correctness_report.py --version "${{ steps.release-version.outputs.version }}" --output release-assets/reports/correctness.json
+          uv run python examples/comprehensive.py --preset PN14QP439 --workers 2 --skip-serialization --report release-assets/reports/precision-pn14.json
+          uv run python examples/comprehensive.py --preset PN15QP880 --workers 2 --skip-serialization --report release-assets/reports/precision-pn15.json
+          uv run python scripts/generate_compatibility_bundle.py release-assets/mkckks-compatibility-v${{ steps.release-version.outputs.version }}.tar.gz --version "${{ steps.release-version.outputs.version }}"
+          go test -json -run '^$' -bench 'Benchmark(DirectGo|BridgeModel)(Add|Multiply|Rotate)$' -benchmem -count=5 ./bridge > release-assets/reports/go-benchmarks.jsonl
+          uv run python benchmarks/benchmark.py --output release-assets/reports/native-python-benchmarks.json
+          uv run python benchmarks/workflow_benchmark.py --output release-assets/reports/workflow-benchmarks.json
+          uv run python benchmarks/encryption_throughput.py --workers 1 --output release-assets/reports/encryption-workers1.json
+          uv run python benchmarks/encryption_throughput.py --workers 4 --output release-assets/reports/encryption-workers4.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-evidence
+          path: release-assets
+          if-no-files-found: error
+
+  source-distribution:
+    needs: release-verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-verification.outputs.commit }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version: 1.26.5
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.12.2
+      - name: Reproducible source builds
+        run: |
+          SOURCE_DATE_EPOCH=1704067200 uv build --sdist --out-dir source-a
+          SOURCE_DATE_EPOCH=1704067200 uv build --sdist --out-dir source-b
+          cmp source-a/*.tar.gz source-b/*.tar.gz
+          python -c "import glob,tarfile; n=tarfile.open(glob.glob('source-a/*.tar.gz')[0]).getnames(); assert not any('/cnn/' in x or '/mkbfv/' in x or '/benchmark-results/' in x for x in n)"
+      - name: Clean source install and encrypted workflow
+        run: |
+          python -m venv source-test
+          source-test/bin/python -m pip install source-a/*.tar.gz
+          source-test/bin/python scripts/wheel_smoke.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: source-distribution
+          path: source-a/*.tar.gz
+          if-no-files-found: error
+
+  manylinux-wheel:
+    needs: release-verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-verification.outputs.commit }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.12.2
+      - run: uv sync --locked --all-groups
+      - name: Build and test manylinux_2_28 wheel twice
+        run: |
+          uv run cibuildwheel --output-dir wheel-a
+          uv run cibuildwheel --output-dir wheel-b
+          cmp wheel-a/*.whl wheel-b/*.whl
+        env:
+          CIBW_BUILD: cp312-manylinux_x86_64
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_BEFORE_ALL_LINUX: >-
+            curl -fsSLO https://go.dev/dl/go1.26.5.linux-amd64.tar.gz &&
+            echo '5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053  go1.26.5.linux-amd64.tar.gz' | sha256sum -c - &&
+            tar -C /usr/local -xzf go1.26.5.linux-amd64.tar.gz
+          CIBW_ENVIRONMENT_LINUX: >-
+            PATH=/usr/local/go/bin:$PATH
+            SOURCE_DATE_EPOCH=1704067200
+          CIBW_TEST_COMMAND: python {project}/scripts/wheel_smoke.py
+      - run: uv run auditwheel show wheel-a/*.whl
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: manylinux-wheel
+          path: wheel-a/*.whl
+          if-no-files-found: error
+
+  macos-wheel:
+    needs: release-verification
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-verification.outputs.commit }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version: 1.26.5
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.12.2
+      - run: uv sync --locked --all-groups
+      - name: Reproducible macOS wheel builds
+        run: |
+          SOURCE_DATE_EPOCH=1704067200 MACOSX_DEPLOYMENT_TARGET=12.0 uv build --wheel --out-dir wheel-a
+          SOURCE_DATE_EPOCH=1704067200 MACOSX_DEPLOYMENT_TARGET=12.0 uv build --wheel --out-dir wheel-b
+          cmp wheel-a/*.whl wheel-b/*.whl
+      - run: uv run delocate-listdeps --all wheel-a/*.whl
+      - name: Clean-wheel encrypted workflow
+        run: |
+          python -m venv wheel-test
+          wheel-test/bin/python -m pip install wheel-a/*.whl
+          wheel-test/bin/python scripts/wheel_smoke.py
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: macos-${{ matrix.architecture }}-wheel
+          path: wheel-a/*.whl
+          if-no-files-found: error
+
+  draft-prerelease:
+    needs: [release-verification, source-distribution, manylinux-wheel, macos-wheel]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          path: release-files
+          merge-multiple: true
+      - name: Generate checksums
+        run: |
+          duplicate_names="$(find release-files -type f -printf '%f\n' | sort | uniq -d)"
+          test -z "$duplicate_names"
+          cd release-files
+          find . -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum \
+            | sed 's#  .*/#  #' > SHA256SUMS
+      - name: Create draft noncommercial research prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ needs.release-verification.outputs.version }}" \
+            --repo "${{ github.repository }}" \
+            --target "${{ needs.release-verification.outputs.commit }}" \
+            --title "MKCKKS Go2Py v${{ needs.release-verification.outputs.version }}" \
+            --notes "Unaudited, noncommercial source-available research prerelease. New wrapper code is MIT; bundled protected upstream MKHE-KKLSS code remains CC BY-NC 2.0. This engineering release is not a cryptographic security audit." \
+            --draft --prerelease
+          find release-files -type f -exec gh release upload "v${{ needs.release-verification.outputs.version }}" --repo "${{ github.repository }}" {} +

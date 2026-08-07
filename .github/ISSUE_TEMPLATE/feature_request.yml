@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose a scoped API, performance, packaging, or documentation improvement.
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use case
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and verification
+      description: Describe semantics, edge cases, and a reproducible verification approach.
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and security impact

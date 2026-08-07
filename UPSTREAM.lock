@@ -1,0 +1,67 @@
+repository = "https://github.com/SNUCP/MKHE-KKLSS.git"
+commit = "13fed55fd28270fb4345dd532da24b323ebc5ce3"
+license = "CC-BY-NC-2.0"
+
+[paths.mkckks]
+files = 9
+sha256 = "ce003392c9b201a7b0806ad7fab9eaf218fcb14bb56d655ffd723cba3d7ad097"
+
+[paths.mkrlwe]
+files = 11
+sha256 = "e652002e94f3be7e260e019cf0cfe6a3bed6675b5e15aeb2402c391b7d5d2e93"
+
+[paths.mkbfv]
+files = 12
+sha256 = "42b305b5c4f740d4e23873085704a0b92e90c8ab0cba92a40caf885a4cf0f13e"
+
+[paths.cnn]
+files = 9
+sha256 = "bd2925e7d7518f0e5bb06ae80f3d954e13dd6980460182a1bef3fbcc9128aa34"
+
+[paths."go.mod"]
+files = 1
+sha256 = "63daeaedbbdf1f1d34a69304165a114fb130d383bbe31a7ac2503730c35bd301"
+
+[files]
+"cnn/cnn.go" = "288ea0f60e18f0982196e4ea4f06a4042fb6b44e31f5e03df5542bd9e1690e79"
+"cnn/cnn_bench_test.go" = "b4671e64442a9d2bb083c88e637bf649c14ce60f736afd80ca418f72ab0883ad"
+"cnn/cnn_test.go" = "83786cda77a7f111df9025ba93a10777a5878f299e15f0e1e481325e440e0eba"
+"cnn/data/B1.txt" = "724e456115cb9ccb7a992e4cf4bdf95e27ea07c5103d965b6b38b344812b0622"
+"cnn/data/B2.txt" = "d655448e079a22a5db66b6b70ba35b81609a9bd9f2ebefb289d31471406daccf"
+"cnn/data/FC1.txt" = "1f9cf3878649ee25362cbc17bf4295b5541e8702aa9b802dbc5bca71794bca83"
+"cnn/data/FC2.txt" = "9ce0783b496b89aa9fc9abf6b490cb597384252675074dcde381a5fab21eb7ee"
+"cnn/data/k1.txt" = "4f3a62005f82c030800d68a3d5dd539d11104e00f361d00831dc255f2c11baaf"
+"cnn/data/mnist_test.csv" = "ec3d6312609e1f0b85291cd250330f695d76494ae5181fc55c2678d27d2afd04"
+"go.mod" = "c4f96664670fc325ebbe8a979b7526d6192b710e64e3bb4a14773c728c39aea7"
+"mkbfv/basis_extension.go" = "cc274ff6dd477fe7db7bc6e1f8e04ec274999070ec3508bff90b3f8797345501"
+"mkbfv/decryptor.go" = "a42a5ebe60e76230f149929f72fb25337e86cafe6c7435c145a771b44422333c"
+"mkbfv/elements.go" = "e7f8b3d33740bbbfecad61e01453f512874a7fd0e7dc55a0604fd5c0478d3cbf"
+"mkbfv/encryptor.go" = "539e11fcbf4f6da4c9c5e52233e3e84e1fbe9df315eab1080d50f5f260484280"
+"mkbfv/evaluator.go" = "f8193de7a06af0a2f1145efdd6a7c8d2f81727d04359505ef0ae1ee5f9c553ff"
+"mkbfv/keygen.go" = "a522968cea73e2ceeeeb19e4ca893544d078f4e7cec5c9db17abf05791116b5d"
+"mkbfv/keys.go" = "cc6c9663279f97d88003d5a397209a4a3bb9e669afe30ebefb76b18b6e8dc386"
+"mkbfv/keyswitch.go" = "f58e46e376be2035c39992314143b4d68efdad7ff15dffc8ef06c891e1d2f476"
+"mkbfv/keyswitch_hoisted.go" = "a41626ad531055bb9f91b23ca08789c2214776f9b7da1f14df5b73d18c4f2954"
+"mkbfv/mkbfv_bench_test.go" = "f4315f0bd089b361c7d088035e588d505b39812a665c24b4f024199715d36cc0"
+"mkbfv/mkbfv_test.go" = "6bc410d9d5dd123267f01dd57e4fe4672708343943f1301dee8ff41d1c8885ac"
+"mkbfv/params.go" = "92aeb4c941c9a36b911caf9a259ffd68ad7778d4e2c4d8448f9f1b48d8fde25b"
+"mkckks/decryptor.go" = "b29f1b12cb8447b153a5a6828070512463b4f47c47357a792d807adc156b60c7"
+"mkckks/elements.go" = "da979bbf881cb61a0251948ab644da8a33b733f7a23bb2182556bf9f704901c3"
+"mkckks/encryptor.go" = "14c850ff4fdc877cb2d33beb5c542ccb1128c04e605ec46fa63911f152c3afe3"
+"mkckks/evaluator.go" = "929be3ec4c63277db4fb33dbda4ab618213508de4bb98442565f51de3581f080"
+"mkckks/keys.go" = "a74d56368823a8c06be19381a03b366610c7b1b8a7fc3ae52858ca09b676c3da"
+"mkckks/mkckks_benchmark_test.go" = "eba5d43c8950c74039ae688ebddb5436bb302f031968aa4babf82cc0367aa26e"
+"mkckks/mkckks_test.go" = "61a115ccf34948d5f6fad5c1395ae30da7e2813fa2b067081e95ede4a7fad9a8"
+"mkckks/params.go" = "3aaff6e06fcf5ad593919f69ac1b3bc051a27c60601bb2f034c578d5d65d933d"
+"mkckks/utils.go" = "066760ec997b0182e45b397ac2f290307cbd6829efe2130c9a0e6fc4665db45b"
+"mkrlwe/basis_extension.go" = "5393ecea2f2393f0b88a96adde4095bd9a87a9449448755d8ab026c950c5ac8a"
+"mkrlwe/decryptor.go" = "9cc2f03d92f2ff6efd79c1d09223825836827d2f200a0d98a35b4cb8e34fd53e"
+"mkrlwe/elements.go" = "72d393450e628a8aff06b89851b1b0da809a82e1bd42d121a9426ae5e1965dd8"
+"mkrlwe/encryptor.go" = "fbb3fa3f289af3eb522061ff3c88f4005cbb5eef5056c8abfafabe312ab15dd2"
+"mkrlwe/idset.go" = "3d8c6290e916397e6ef7578e9e2e026ce2bba9edde615c423b800420b64b3e15"
+"mkrlwe/keygen.go" = "dbed678353f0aa0b0ceb3f580a644286d100ecb4ac95078d28eb90af60517b74"
+"mkrlwe/keys.go" = "a044e5adb767b953b237fb198eb1f2da1d5fccca3d077f696dbe7eaadc1c9b18"
+"mkrlwe/keyswitch.go" = "b4756fd224a66b321070d228a6aaa00e90016b0cf791f32b556f98a46a18f54f"
+"mkrlwe/keyswitch_hoisted.go" = "40e45f6a9a98b1e8c96d39b8db733b9cb589f7fc4622761d71defeaf1c60a1ed"
+"mkrlwe/mkrlwe_test.go" = "ca1d3ee18d02ffc538ba3f312db9797f95a68d65959c26a9529fe8805deb9a90"
+"mkrlwe/params.go" = "b1561c39646ebb4cd01acba2d78e6154d4b8e9ddf1fd6e7b2aad7c587ae73085"
