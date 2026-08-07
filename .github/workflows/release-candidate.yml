@@ -19,8 +19,6 @@ jobs:
       commit: ${{ steps.release-commit.outputs.commit }}
       version: ${{ steps.release-version.outputs.version }}
     env:
-      MKCKKS_CIRCUIT_COUNT_PN14: "250"
-      MKCKKS_CIRCUIT_COUNT_PN15: "150"
       MKCKKS_OPERATION_PAIR_LIMIT: "144"
       MKCKKS_FAILURE_DIR: release-assets/failures
     steps:
@@ -48,11 +46,19 @@ jobs:
           enable-cache: true
       - run: uv sync --locked --all-groups
       - run: uv run python scripts/verify_upstream.py
-      - run: go test ./mkckks ./mkrlwe ./mkbfv ./bridge
+      - name: Protected and full bridge release tests
+        run: go test -count=1 -timeout 60m ./mkckks ./mkrlwe ./mkbfv ./bridge
+        env:
+          MKCKKS_CIRCUIT_COUNT_PN14: "250"
+          MKCKKS_CIRCUIT_COUNT_PN15: "150"
       - run: go vet ./bridge ./mkckks ./mkrlwe
       - run: go test -race -run 'Test(WorkerAndConcurrentOperationMatrix|ConcurrentEvaluationKeyUse|RegistryRejectsStaleHandles)$' ./bridge
       - run: bash scripts/check_go_coverage.sh
-      - run: uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
+      - name: Python correctness, generated circuits, and coverage
+        run: uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
+        env:
+          MKCKKS_CIRCUIT_COUNT_PN14: "250"
+          MKCKKS_CIRCUIT_COUNT_PN15: "150"
       - run: uv run pytest tests/test_release_correctness.py tests/test_correctness_certification.py -m release
       - name: Preserve generated-circuit failure records
         if: failure()
