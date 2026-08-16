@@ -1,0 +1,27 @@
+version: 2
+
+# The Go module set is deliberately absent. go.mod is byte-locked by
+# UPSTREAM.lock and scripts/verify_upstream.py, and the pinned Lattigo version
+# is part of the certified upstream snapshot, so an automated bump would both
+# fail CI and silently change the cryptographic implementation under test.
+# Go dependency changes must go through a deliberate upstream re-certification.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
+    commit-message:
+      prefix: build

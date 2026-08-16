@@ -30,28 +30,23 @@ jobs:
           version: 0.12.2
           enable-cache: true
       - run: uv sync --locked --all-groups
+      # Core source gates run through scripts/check.sh. Stages are split into
+      # steps for readable status reporting; CI-only examples and wheel jobs
+      # follow separately.
       - name: Verify protected upstream snapshot
-        run: uv run python scripts/verify_upstream.py
-      - name: Protected and bridge Go tests
-        run: go test ./mkckks ./mkrlwe ./mkbfv ./bridge
-      - name: Go vet for wrapper-relevant packages
-        run: go vet ./bridge ./mkckks ./mkrlwe
-      - name: Native race detector
-        run: go test -race -run 'Test(WorkerAndConcurrentOperationMatrix|ConcurrentEvaluationKeyUse|RegistryRejectsStaleHandles)$' ./bridge
-      - name: Go bridge coverage
-        run: bash scripts/check_go_coverage.sh
+        run: bash scripts/check.sh upstream
+      - name: Protected and bridge Go tests, vet, race detector, coverage
+        run: bash scripts/check.sh go race coverage
       - name: Python correctness and 1,000-cycle lifecycle suite
-        run: uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
-      - name: Full standalone C ABI suite
-        run: bash scripts/test_c_abi.sh
-      - name: ABI symbol snapshot
-        run: uv run python scripts/verify_abi_symbols.py
+        run: bash scripts/check.sh pytest
+        env:
+          PYTEST_ADDOPTS: --cov=src/mkckks --cov-branch --cov-report=term-missing
+      - name: Full standalone C ABI suite and symbol snapshot
+        run: bash scripts/check.sh cabi abi
       - name: Static quality and licensing
-        run: |
-          uv run ruff format --check src tests scripts examples benchmarks
-          uv run ruff check src tests scripts examples benchmarks
-          uv run mypy src/mkckks examples/comprehensive.py scripts/generate_compatibility_bundle.py
-          uv run reuse lint
+        run: bash scripts/check.sh lint types licence
+      - name: Audit locked dependencies for known vulnerabilities
+        run: bash scripts/check.sh audit
       - name: Execute notebook
         run: uv run jupyter nbconvert --to notebook --execute tutorial.ipynb --output-dir /tmp --output tutorial-executed.ipynb
       - name: Execute distributed-process example

@@ -11,6 +11,12 @@ on:
 permissions:
   contents: read
 
+# A certification run takes hours and ultimately owns one project-version tag.
+# Different spellings of the same target (branch, tag, SHA) must not race.
+concurrency:
+  group: release-candidate-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   release-verification:
     runs-on: ubuntu-24.04
@@ -36,6 +42,38 @@ jobs:
         run: |
           version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      # --target only controls automatic tag creation. Resolve the tag itself so
+      # a tag created without a release cannot redirect certified artifacts.
+      - name: Refuse to certify a version tagged at another commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.release-version.outputs.version }}
+          COMMIT: ${{ steps.release-commit.outputs.commit }}
+        run: |
+          tag="v$VERSION"
+          ref_error="$RUNNER_TEMP/tag-ref-error"
+          if ! gh api "repos/$REPO/git/ref/tags/$tag" --silent 2>"$ref_error"; then
+            if grep -q '(HTTP 404)' "$ref_error"; then
+              echo "::notice::Tag $tag does not exist yet."
+              exit 0
+            fi
+            cat "$ref_error" >&2
+            echo "::error::Unable to check whether tag $tag exists."
+            exit 1
+          fi
+          tag_error="$RUNNER_TEMP/tag-resolution-error"
+          if ! tagged_commit="$(gh api "repos/$REPO/commits/$tag" --jq .sha 2>"$tag_error")"; then
+            cat "$tag_error" >&2
+            echo "::error::Unable to resolve tag $tag through the commits API."
+            exit 1
+          fi
+          if [ "$tagged_commit" != "$COMMIT" ]; then
+            echo "::error::Tag $tag already exists at $tagged_commit, not the" \
+              "certified commit $COMMIT. Bump project.version, or move/delete that tag."
+            exit 1
+          fi
+          echo "::notice::Tag $tag already resolves to this certified commit."
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: 1.26.5
@@ -69,11 +107,12 @@ jobs:
           if-no-files-found: ignore
       - run: bash scripts/test_c_abi.sh
       - run: uv run python scripts/verify_abi_symbols.py
+      - run: bash scripts/check.sh audit
       - name: Static quality, notebook, and distributed example
         run: |
           uv run ruff format --check src tests scripts examples benchmarks
           uv run ruff check src tests scripts examples benchmarks
-          uv run mypy src/mkckks examples/comprehensive.py scripts/generate_compatibility_bundle.py scripts/write_correctness_report.py
+          uv run mypy src/mkckks examples/comprehensive.py examples/original_notebook_verification.py scripts/generate_compatibility_bundle.py scripts/write_correctness_report.py
           uv run reuse lint
           uv run jupyter nbconvert --to notebook --execute tutorial.ipynb --output-dir /tmp --output tutorial-executed.ipynb
           uv run python examples/distributed.py
@@ -90,9 +129,21 @@ jobs:
           go test -run '^$' -fuzz '^FuzzEvaluationKeyPayloads$' -fuzztime 15s ./bridge
           go test -run '^$' -fuzz '^FuzzRegistryHandleSequences$' -fuzztime 15s ./bridge
       - name: 10,000-cycle lifecycle and retained-memory soak
-        run: uv run pytest tests/test_public_contract.py -k handle_stress
+        # -m slow overrides the default deselection so this test is not skipped.
+        run: uv run pytest tests/test_public_contract.py -k handle_stress -m slow
         env:
           MKCKKS_STRESS_CYCLES: "10000"
+      - name: Generate runtime dependency SBOM
+        run: |
+          mkdir -p release-assets/reports
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt \
+            -o "$RUNNER_TEMP/runtime-requirements.txt" > /dev/null
+          uv run cyclonedx-py requirements "$RUNNER_TEMP/runtime-requirements.txt" \
+            --pyproject pyproject.toml \
+            --mc-type library \
+            --output-reproducible \
+            --of JSON \
+            -o release-assets/reports/sbom.cdx.json
       - name: Generate correctness, compatibility, and benchmark evidence
         run: |
           mkdir -p release-assets/reports
@@ -249,11 +300,18 @@ jobs:
       - name: Create draft noncommercial research prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: v${{ needs.release-verification.outputs.version }}
+          TARGET: ${{ needs.release-verification.outputs.commit }}
+        # Creating and uploading are separately idempotent so a re-dispatch after
+        # a partial upload finishes the release instead of erroring out.
         run: |
-          gh release create "v${{ needs.release-verification.outputs.version }}" \
-            --repo "${{ github.repository }}" \
-            --target "${{ needs.release-verification.outputs.commit }}" \
-            --title "MKCKKS Go2Py v${{ needs.release-verification.outputs.version }}" \
-            --notes "Unaudited, noncommercial source-available research prerelease. New wrapper code is MIT; bundled protected upstream MKHE-KKLSS code remains CC BY-NC 2.0. This engineering release is not a cryptographic security audit." \
-            --draft --prerelease
-          find release-files -type f -exec gh release upload "v${{ needs.release-verification.outputs.version }}" --repo "${{ github.repository }}" {} +
+          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --target "$TARGET" \
+              --title "MKCKKS Go2Py $TAG" \
+              --notes "Unaudited, noncommercial source-available research prerelease. New wrapper code is MIT; bundled protected upstream MKHE-KKLSS code remains CC BY-NC 2.0. This engineering release is not a cryptographic security audit." \
+              --draft --prerelease
+          fi
+          find release-files -type f -exec gh release upload "$TAG" --repo "$REPO" --clobber {} +

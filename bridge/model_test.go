@@ -447,6 +447,17 @@ func mustArtifact(t *testing.T, entry registryEntry) []byte {
 	return data
 }
 
+func requireStatusCode(t *testing.T, err error, want int) {
+	t.Helper()
+	var statusErr *nativeStatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected native status %d, got %T: %v", want, err, err)
+	}
+	if statusErr.code != want {
+		t.Fatalf("unexpected native status: got %d want %d (%v)", statusErr.code, want, err)
+	}
+}
+
 func TestCoreHelpersAndFailurePaths(t *testing.T) {
 	ctx := testContext(t)
 	other := testContext(t)
@@ -585,6 +596,30 @@ func TestCoreHelpersAndFailurePaths(t *testing.T) {
 	}
 }
 
+func TestParallelForSkipsQueuedWorkAfterFailure(t *testing.T) {
+	const workers = 2
+	var calls atomic.Int32
+	ready := make(chan struct{})
+	sentinel := errors.New("parallel failure")
+
+	err := parallelFor(8, workers, func(int) error {
+		// The first two jobs rendezvous before either fails. The dispatcher is
+		// then blocked on the third unbuffered send; a worker can accept it only
+		// after recording the failure, so it must be skipped deterministically.
+		if calls.Add(1) == workers {
+			close(ready)
+		}
+		<-ready
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("parallel worker lost error: %v", err)
+	}
+	if got := calls.Load(); got != workers {
+		t.Fatalf("queued work ran after failure: got %d calls want %d", got, workers)
+	}
+}
+
 func TestStrictParameterAndOperationValidation(t *testing.T) {
 	ctx := testContext(t)
 	valid, err := json.Marshal(ctx.literal)
@@ -666,6 +701,11 @@ func TestStrictParameterAndOperationValidation(t *testing.T) {
 	if _, err = binaryCipher("add", ciphertext, &mismatched); err == nil {
 		t.Fatal("mismatched ciphertext length accepted")
 	}
+	if _, err = multiplyCipher(ciphertext, &mismatched, nil, false); err == nil {
+		t.Fatal("mismatched ciphertext multiplication accepted")
+	} else {
+		requireStatusCode(t, err, statusInvalid)
+	}
 	badScale := *ciphertext
 	badScale.chunks = []*mkckks.Ciphertext{ciphertext.chunks[0].CopyNew()}
 	badScale.chunks[0].Scale *= 1.5
@@ -739,6 +779,8 @@ func TestStrictParameterAndOperationValidation(t *testing.T) {
 	}
 	if _, err = partialDecrypt(alice, bobCiphertext); err == nil {
 		t.Fatal("non-participant decryption share accepted")
+	} else {
+		requireStatusCode(t, err, statusShare)
 	}
 	share, err := partialDecrypt(alice, ciphertext)
 	if err != nil {

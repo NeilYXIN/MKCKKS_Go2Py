@@ -65,6 +65,7 @@ __all__ = [
     "ResourceLimits",
     "SerializationError",
     "ShapeMismatchError",
+    "__version__",
     "measure_precision",
     "precision_bound",
 ]

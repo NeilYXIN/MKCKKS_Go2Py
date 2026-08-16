@@ -8,14 +8,8 @@ import pytest
 
 import mkckks
 from mkckks._artifacts import pack, unpack
+from tests.conftest import decrypt_one
 from tests.precision_model import assert_precision, local
-
-
-def decrypt_one(
-    context: mkckks.Context, party: mkckks.Party, ciphertext: mkckks.Ciphertext
-) -> np.ndarray:
-    with party.partial_decrypt(ciphertext) as share:
-        return context.collective_decrypt(ciphertext, [share])
 
 
 def test_precision_contract_and_randomized_encryption(context: mkckks.Context) -> None:

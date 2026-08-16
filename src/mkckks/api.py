@@ -100,6 +100,7 @@ class ResourceLimits:
     max_artifact_bytes: int = HARD_MAX_ARTIFACT_BYTES
 
     def __post_init__(self) -> None:
+        """Reject limits that are not positive integers within the hard caps."""
         for name, value, maximum in (
             ("max_chunks", self.max_chunks, HARD_MAX_VALUES),
             ("max_values", self.max_values, HARD_MAX_VALUES),
@@ -132,7 +133,9 @@ class Parameters:
         try:
             value = cls._PRESETS[name.upper()]
         except KeyError as exc:
-            raise ValueError(f"unknown preset {name!r}; choose PN14QP439 or PN15QP880") from exc
+            raise InvalidParameterError(
+                f"unknown preset {name!r}; choose PN14QP439 or PN15QP880"
+            ) from exc
         return replace(cls.from_literal(**value), _preset_name=name.upper())
 
     @classmethod
@@ -148,39 +151,39 @@ class Parameters:
     ) -> Parameters:
         """Construct expert parameters; native Lattigo validation occurs at context creation."""
         if isinstance(log_n, bool) or isinstance(log_slots, bool):
-            raise ValueError("log_n and log_slots must be integers")
+            raise InvalidParameterError("log_n and log_slots must be integers")
         try:
             log_n = operator.index(log_n)
             log_slots = operator.index(log_slots)
         except TypeError as exc:
-            raise ValueError("log_n and log_slots must be integers") from exc
+            raise InvalidParameterError("log_n and log_slots must be integers") from exc
         if not 1 <= log_slots < log_n <= 20:
-            raise ValueError("require 1 <= log_slots < log_n <= 20")
+            raise InvalidParameterError("require 1 <= log_slots < log_n <= 20")
         if not 1 <= len(q) <= 64 or not 2 <= len(p) <= 8 or len(p) % 2:
-            raise ValueError("require 1-64 Q moduli and an even count of 2-8 P moduli")
+            raise InvalidParameterError("require 1-64 Q moduli and an even count of 2-8 P moduli")
         try:
             normalized_q = tuple(operator.index(value) for value in q)
             normalized_p = tuple(operator.index(value) for value in p)
         except TypeError as exc:
-            raise ValueError("Q and P moduli must be unsigned 64-bit integers") from exc
+            raise InvalidParameterError("Q and P moduli must be unsigned 64-bit integers") from exc
         if any(isinstance(value, bool) for value in (*q, *p)) or any(
             not 0 < value < 2**64 for value in (*normalized_q, *normalized_p)
         ):
-            raise ValueError("Q and P moduli must be unsigned 64-bit integers")
+            raise InvalidParameterError("Q and P moduli must be unsigned 64-bit integers")
         if isinstance(scale, bool) or isinstance(sigma, bool):
-            raise ValueError("scale and sigma must be finite and positive")
+            raise InvalidParameterError("scale and sigma must be finite and positive")
         try:
             normalized_scale = float(scale)
             normalized_sigma = float(sigma)
         except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError("scale and sigma must be finite and positive") from exc
+            raise InvalidParameterError("scale and sigma must be finite and positive") from exc
         if (
             not math.isfinite(normalized_scale)
             or normalized_scale <= 0
             or not math.isfinite(normalized_sigma)
             or normalized_sigma <= 0
         ):
-            raise ValueError("scale and sigma must be finite and positive")
+            raise InvalidParameterError("scale and sigma must be finite and positive")
         return cls(
             log_n,
             log_slots,
@@ -217,6 +220,8 @@ def _release_safely(handle: int, pid: int) -> None:
 
 
 class _NativeObject:
+    """Owner of one native handle, released by ``close()`` or garbage collection."""
+
     def __init__(self, handle: int) -> None:
         self._handle = handle
         self._pid = os.getpid()
@@ -236,9 +241,27 @@ class _NativeObject:
 
     @property
     def closed(self) -> bool:
+        """Whether the native handle has been released."""
         return self._handle == 0
 
+    def _repr_fields(self) -> list[str]:
+        """Return ``name=value`` fragments describing this object for ``repr()``."""
+        return []
+
+    def __repr__(self) -> str:
+        name = type(self).__name__
+        if self.closed:
+            return f"{name}(closed=True)"
+        try:
+            fields = self._repr_fields()
+        except Exception:
+            # repr() is called by debuggers and logging, so it must never raise
+            # even when the handle is unusable (for example after a fork).
+            return f"{name}(<unavailable>)"
+        return f"{name}({', '.join(fields)})"
+
     def close(self) -> None:
+        """Release the native handle; repeated calls are harmless."""
         if self._handle:
             if self._pid != os.getpid():
                 self._handle = 0
@@ -270,7 +293,7 @@ def _normalized_array(
     array = np.asarray(values)
     logical_shape = array.shape
     if array.size == 0:
-        raise ValueError("empty arrays cannot be encrypted or encoded")
+        raise InvalidParameterError("empty arrays cannot be encrypted or encoded")
     if array.dtype.kind == "f":
         normalized = np.ascontiguousarray(array, dtype=np.float64)
         is_complex = False
@@ -287,7 +310,7 @@ def _normalized_array(
         # value in the flattened ABI buffer.
         normalized = normalized.reshape(())
     if not np.all(np.isfinite(normalized)):
-        raise ValueError("input contains NaN or infinity")
+        raise InvalidParameterError("input contains NaN or infinity")
     maximum_values = min(context.limits.max_values, context.limits.max_chunks * context.slots)
     if normalized.size > maximum_values:
         raise InvalidParameterError(
@@ -313,7 +336,7 @@ def _normalized_scalar(value: Any, context: Context) -> complex:
     except (TypeError, ValueError) as exc:
         raise InvalidDTypeError("scalar must be a real or complex floating-point value") from exc
     if not math.isfinite(normalized.real) or not math.isfinite(normalized.imag):
-        raise ValueError("scalar must be finite")
+        raise InvalidParameterError("scalar must be finite")
     _validate_magnitude(context, max(abs(normalized.real), abs(normalized.imag)))
     return normalized
 
@@ -527,6 +550,16 @@ def _warn_on_range_transition(result: Ciphertext, inputs: Sequence[Plaintext | C
 
 
 class Context(_NativeObject):
+    """Shared CKKS parameters and common reference string for one computation.
+
+    Every party, key, plaintext, ciphertext and decryption share belongs to
+    exactly one context. Mixing objects from two contexts raises
+    :class:`~mkckks.ContextMismatchError`, even when both were created from
+    identical parameters, because the common reference string differs.
+
+    Use :meth:`create` rather than constructing this class directly.
+    """
+
     def __init__(
         self,
         handle: int,
@@ -552,6 +585,23 @@ class Context(_NativeObject):
         input_policy: InputPolicy = InputPolicy.VALIDATED,
         limits: ResourceLimits | None = None,
     ) -> Context:
+        """Create a context and its common reference string.
+
+        Args:
+            parameters: A preset from :meth:`Parameters.preset`, or an expert
+                literal, which requires ``input_policy=InputPolicy.EXPERT``.
+            workers: Goroutines used for per-chunk evaluation. ``None`` lets the
+                native layer choose based on available CPUs.
+            input_policy: ``VALIDATED`` restricts inputs to the range covered by
+                the project's correctness tests. ``EXPERT`` lifts that
+                restriction and warns, because results are then untested.
+            limits: Denial-of-service limits applied before entering native
+                code. Defaults to :class:`ResourceLimits`.
+
+        Raises:
+            InvalidParameterError: The policy is unknown, or an expert literal
+                was supplied under ``VALIDATED``.
+        """
         try:
             policy = InputPolicy(input_policy)
         except (TypeError, ValueError) as exc:
@@ -579,38 +629,61 @@ class Context(_NativeObject):
         del owner
         return cls(handle, parameters, policy, limits or ResourceLimits())
 
+    def _repr_fields(self) -> list[str]:
+        preset = self.parameters._preset_name
+        return [
+            f"parameters={preset or 'expert'}",
+            f"slots={self.slots}",
+            f"max_level={self.max_level}",
+            f"workers={self.workers}",
+            f"policy={self.input_policy.value}",
+        ]
+
     @property
     def parameters(self) -> Parameters:
+        """The parameter literal this context was created from."""
         return self._parameters
 
     @property
     def input_policy(self) -> InputPolicy:
+        """Whether inputs are restricted to the correctness-tested range."""
         return self._input_policy
 
     @property
     def limits(self) -> ResourceLimits:
+        """Denial-of-service limits applied before entering native code."""
         return self._limits
 
     @property
     def fingerprint(self) -> str:
+        """Hex digest binding objects to this context and its reference string."""
         return str(self._info["fingerprint"])
 
     @property
     def slots(self) -> int:
+        """Plaintext slots per chunk; arrays longer than this span several chunks."""
         return int(self._info["slots"])
 
     @property
     def workers(self) -> int:
+        """Goroutines the native layer uses to evaluate chunks in parallel."""
         return int(self._info["workers"])
 
     @property
     def max_level(self) -> int:
+        """Multiplicative level of a freshly encrypted ciphertext."""
         return int(self._info["max_level"])
 
     def create_party(self, party_id: str) -> Party:
+        """Generate a new party in this context; see :meth:`Party.generate`."""
         return Party.generate(self, party_id)
 
     def to_bytes(self) -> bytes:
+        """Serialize the parameters and common reference string.
+
+        Distribute the result to every participant so they share one reference
+        string. The artifact is large, roughly 100 MiB for ``PN14QP439``.
+        """
         result = _pack_artifact(
             "context",
             {
@@ -634,6 +707,14 @@ class Context(_NativeObject):
         input_policy: InputPolicy = InputPolicy.VALIDATED,
         limits: ResourceLimits | None = None,
     ) -> Context:
+        """Restore a context produced by :meth:`to_bytes`.
+
+        Raises:
+            SerializationError: The artifact is malformed, is not a context, or
+                exceeds ``limits.max_artifact_bytes``.
+            InvalidParameterError: The literal is not a recognized preset and
+                ``input_policy`` is ``VALIDATED``.
+        """
         selected_limits = limits or ResourceLimits()
         if len(data) > selected_limits.max_artifact_bytes:
             raise SerializationError("context artifact exceeds local resource limits")
@@ -666,6 +747,12 @@ class Context(_NativeObject):
             raise SerializationError("artifact exceeds this context's resource limit")
 
     def encode(self, values: Any) -> Plaintext:
+        """Encode a NumPy array into an unencrypted plaintext.
+
+        Accepts real or complex floating-point arrays of any shape. Integer and
+        Boolean arrays must be cast explicitly, so that the loss of exactness is
+        visible at the call site.
+        """
         array, is_complex = _normalized_array(values, self)
         real, imag, real_pointer, imag_pointer = _array_pointers(array, is_complex)
         handle = _native.call_handle(
@@ -682,6 +769,17 @@ class Context(_NativeObject):
     def collective_decrypt(
         self, ciphertext: Ciphertext, shares: Sequence[DecryptionShare]
     ) -> npt.NDArray[np.float64] | npt.NDArray[np.complex128]:
+        """Combine one decryption share per participant to recover the plaintext.
+
+        Exactly one share is required from every party in
+        :attr:`Ciphertext.participants`; no party's secret key is ever revealed.
+        The returned array has the ciphertext's shape, and its dtype is complex
+        only if the ciphertext holds complex data.
+
+        Raises:
+            MissingShareError: A share is missing, duplicated, or bound to a
+                different ciphertext.
+        """
         _require_context(self, ciphertext, *shares)
         handles = (ctypes.c_uint64 * len(shares))(*(share._native_handle for share in shares))
         real = np.empty(ciphertext.size, dtype=np.float64)
@@ -703,6 +801,12 @@ class Context(_NativeObject):
 
 
 class PublicKey(_NativeObject):
+    """A party's encryption-only key, safe to publish.
+
+    Obtained from :attr:`Party.public_key` or :meth:`from_bytes`. Holding it
+    permits encryption under that party but not decryption.
+    """
+
     def __init__(self, handle: int, context: Context) -> None:
         super().__init__(handle)
         self._context = context
@@ -710,16 +814,20 @@ class PublicKey(_NativeObject):
 
     @property
     def context(self) -> Context:
+        """The context this key belongs to."""
         return self._context
 
     def encrypt(self, values: Any) -> Ciphertext:
+        """Encrypt an array under this party alone."""
         return _encrypt(self, self.context, values)
 
     def to_bytes(self) -> bytes:
+        """Serialize this public key for distribution."""
         return _pack_native(self.context, "public_key", {}, self._native_handle)
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> PublicKey:
+        """Restore a public key produced by :meth:`to_bytes`."""
         _, native = _unpack_native(context, data, "public_key")
         handle, kind = _native.import_artifact(context._native_handle, native)
         if kind != 3:
@@ -729,6 +837,14 @@ class PublicKey(_NativeObject):
 
 
 class Party(_NativeObject):
+    """One participant's key pair, including its secret key.
+
+    A party never leaves the process that generated it unless
+    :meth:`export_private_state` is called explicitly. Parties contribute
+    evaluation keys before computation and decryption shares afterwards; no
+    single party can decrypt a multi-party ciphertext alone.
+    """
+
     def __init__(self, handle: int, context: Context, party_id: str) -> None:
         super().__init__(handle)
         self._context = context
@@ -738,16 +854,30 @@ class Party(_NativeObject):
             raise SerializationError("party ID metadata does not match native private state")
         self._party_id = party_id
 
+    def _repr_fields(self) -> list[str]:
+        return [f"party_id={self.party_id!r}"]
+
     @property
     def context(self) -> Context:
+        """The context this party belongs to."""
         return self._context
 
     @property
     def party_id(self) -> str:
+        """This party's identifier, used to label its ciphertext contributions."""
         return self._party_id
 
     @classmethod
     def generate(cls, context: Context, party_id: str) -> Party:
+        """Generate a fresh key pair for ``party_id``.
+
+        The identifier must be 1-128 bytes of UTF-8, must not contain NUL, must
+        be unique within the context, and cannot be ``"0"``, which upstream
+        reserves for the ciphertext constant component.
+
+        Raises:
+            InvalidParameterError: The identifier is malformed or already used.
+        """
         raw = _validate_party_id(party_id)
         owner, pointer = _native.bytes_argument(raw)
         handle = _native.call_handle(
@@ -758,10 +888,17 @@ class Party(_NativeObject):
 
     @property
     def public_key(self) -> PublicKey:
+        """Derive this party's public key.
+
+        Each access returns a new independently owned :class:`PublicKey`, so the
+        caller is responsible for closing it. Reuse one object rather than
+        reading this property in a loop.
+        """
         handle = _native.call_handle(_native.party_public_key, self._native_handle)
         return PublicKey(handle, self.context)
 
     def encrypt(self, values: Any) -> Ciphertext:
+        """Encrypt an array under this party alone."""
         return _encrypt(self, self.context, values)
 
     def generate_evaluation_keys(
@@ -771,6 +908,15 @@ class Party(_NativeObject):
         rotations: Sequence[int] = (),
         conjugation: bool = False,
     ) -> EvaluationKeyContribution:
+        """Produce this party's contribution to the shared evaluation keys.
+
+        Request only what the circuit needs, because each kind costs time and
+        space: ``relinearization`` for :meth:`Evaluator.multiply`, ``rotations``
+        for the rotation amounts used, and ``conjugation`` for
+        :meth:`Evaluator.conjugate`. Every participant must contribute the same
+        kinds, and the contributions are merged with
+        :meth:`EvaluationKeySet.combine`.
+        """
         if not isinstance(relinearization, bool) or not isinstance(conjugation, bool):
             raise InvalidParameterError("relinearization and conjugation must be Boolean")
         values = [
@@ -790,12 +936,26 @@ class Party(_NativeObject):
         return EvaluationKeyContribution(handle, self.context, self.party_id)
 
     def partial_decrypt(self, ciphertext: Ciphertext) -> DecryptionShare:
+        """Produce this party's decryption share for ``ciphertext``.
+
+        The share reveals nothing on its own; it is combined with the shares of
+        every other participant by :meth:`Context.collective_decrypt`.
+
+        Raises:
+            MissingShareError: This party is not among the ciphertext's
+                participants.
+        """
         handle = _native.call_handle(
             _native.partial_decrypt_fn, self._native_handle, ciphertext._native_handle
         )
         return DecryptionShare(handle, self.context, self.party_id, ciphertext.artifact_id)
 
     def export_private_state(self) -> bytes:
+        """Serialize this party including its secret key, emitting a warning.
+
+        The bytes are unencrypted and unauthenticated. Protect them as you would
+        the secret key itself; prefer keeping a party inside one process.
+        """
         warnings.warn(
             "Exporting raw, unencrypted private key material; "
             "authenticate and protect these bytes.",
@@ -811,6 +971,10 @@ class Party(_NativeObject):
 
     @classmethod
     def from_private_state(cls, context: Context, data: bytes) -> Party:
+        """Restore a party from :meth:`export_private_state`, emitting a warning.
+
+        The input is unauthenticated, so only load bytes from a trusted channel.
+        """
         warnings.warn(
             "Importing raw, unencrypted private key material; authenticate and protect this data.",
             RuntimeWarning,
@@ -843,6 +1007,13 @@ def _encrypt(owner: _NativeObject, context: Context, values: Any) -> Ciphertext:
 
 
 class EvaluationKeyContribution(_NativeObject):
+    """One party's share of the joint evaluation keys.
+
+    Produced by :meth:`Party.generate_evaluation_keys` and safe to publish.
+    Contributions from all participants are merged by
+    :meth:`EvaluationKeySet.combine`.
+    """
+
     def __init__(self, handle: int, context: Context, party_id: str) -> None:
         super().__init__(handle)
         self._context = context
@@ -852,15 +1023,21 @@ class EvaluationKeyContribution(_NativeObject):
             raise SerializationError("evaluation-key participant metadata mismatch")
         self._party_id = party_id
 
+    def _repr_fields(self) -> list[str]:
+        return [f"party_id={self.party_id!r}"]
+
     @property
     def context(self) -> Context:
+        """The context this contribution belongs to."""
         return self._context
 
     @property
     def party_id(self) -> str:
+        """Identifier of the party that produced this contribution."""
         return self._party_id
 
     def to_bytes(self) -> bytes:
+        """Serialize this contribution for distribution."""
         return _pack_native(
             self.context,
             "evaluation_key_contribution",
@@ -870,6 +1047,7 @@ class EvaluationKeyContribution(_NativeObject):
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> EvaluationKeyContribution:
+        """Restore a contribution produced by :meth:`to_bytes`."""
         metadata, native = _unpack_native(context, data, "evaluation_key_contribution")
         party_id = _party_id_from_metadata(metadata)
         handle, kind = _native.import_artifact(context._native_handle, native)
@@ -880,6 +1058,13 @@ class EvaluationKeyContribution(_NativeObject):
 
 
 class EvaluationKeySet(_NativeObject):
+    """Merged evaluation keys enabling multiplication, rotation and conjugation.
+
+    Pass this to :class:`Evaluator` to unlock the operations that need key
+    material. The set must cover every participant of every ciphertext it is
+    used on, otherwise :class:`~mkckks.MissingKeyError` is raised.
+    """
+
     def __init__(self, handle: int, context: Context) -> None:
         super().__init__(handle)
         self._context = context
@@ -887,14 +1072,21 @@ class EvaluationKeySet(_NativeObject):
 
     @property
     def context(self) -> Context:
+        """The context these keys belong to."""
         return self._context
 
     @classmethod
     def combine(
         cls, context: Context, contributions: Sequence[EvaluationKeyContribution]
     ) -> EvaluationKeySet:
+        """Merge one contribution per participant into a joint key set.
+
+        Raises:
+            InvalidParameterError: ``contributions`` is empty.
+            MissingKeyError: Two contributions come from the same party.
+        """
         if not contributions:
-            raise ValueError("at least one evaluation-key contribution is required")
+            raise InvalidParameterError("at least one evaluation-key contribution is required")
         _require_context(context, *contributions)
         handles = (ctypes.c_uint64 * len(contributions))(
             *(contribution._native_handle for contribution in contributions)
@@ -903,10 +1095,12 @@ class EvaluationKeySet(_NativeObject):
         return cls(handle, context)
 
     def to_bytes(self) -> bytes:
+        """Serialize the merged key set for distribution to evaluators."""
         return _pack_native(self.context, "evaluation_key_set", {}, self._native_handle)
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> EvaluationKeySet:
+        """Restore a key set produced by :meth:`to_bytes`."""
         _, native = _unpack_native(context, data, "evaluation_key_set")
         handle, kind = _native.import_artifact(context._native_handle, native)
         if kind != 5:
@@ -916,6 +1110,12 @@ class EvaluationKeySet(_NativeObject):
 
 
 class Plaintext(_NativeObject):
+    """An encoded but unencrypted array, created by :meth:`Context.encode`.
+
+    Plaintexts can be added to or multiplied with ciphertexts without any key
+    material, which is cheaper than encrypting a constant operand.
+    """
+
     def __init__(
         self, handle: int, context: Context, shape: tuple[int, ...], is_complex: bool
     ) -> None:
@@ -932,20 +1132,27 @@ class Plaintext(_NativeObject):
         self._is_complex: bool = is_complex
         self._tracking = _validated_tracking(metadata)
 
+    def _repr_fields(self) -> list[str]:
+        return [f"shape={self.shape}", f"dtype={'complex128' if self.is_complex else 'float64'}"]
+
     @property
     def correctness_status(self) -> CorrectnessStatus:
+        """Whether this value is still inside the project's tested contract."""
         return _correctness_status(self.context, self._range_exceeded)
 
     @property
     def tracked_magnitude_bound(self) -> float:
+        """Conservative upper bound on the largest encoded component."""
         return float(self._tracking["tracked_magnitude_bound"])
 
     @property
     def tracked_error_bound(self) -> float:
+        """Conservative upper bound on the accumulated approximation error."""
         return float(self._tracking["tracked_error_bound"])
 
     @property
     def range_margin_bits(self) -> float:
+        """Bits of headroom left before the tracked range is exceeded."""
         return float(self._tracking["range_margin_bits"])
 
     @property
@@ -954,17 +1161,21 @@ class Plaintext(_NativeObject):
 
     @property
     def context(self) -> Context:
+        """The context this plaintext belongs to."""
         return self._context
 
     @property
     def shape(self) -> tuple[int, ...]:
+        """Logical NumPy shape of the encoded array."""
         return self._shape
 
     @property
     def is_complex(self) -> bool:
+        """Whether this plaintext holds complex rather than real data."""
         return self._is_complex
 
     def to_bytes(self) -> bytes:
+        """Serialize this plaintext together with its correctness metadata."""
         return _pack_native(
             self.context,
             "plaintext",
@@ -978,6 +1189,12 @@ class Plaintext(_NativeObject):
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> Plaintext:
+        """Restore a plaintext produced by :meth:`to_bytes`.
+
+        Raises:
+            SerializationError: The artifact is malformed, or its recorded
+                correctness metadata disagrees with the native payload.
+        """
         metadata, native = _unpack_native(context, data, "plaintext")
         shape = _validated_shape(metadata.get("shape"))
         is_complex = _complex_flag_from_metadata(metadata)
@@ -991,6 +1208,16 @@ class Plaintext(_NativeObject):
 
 
 class Ciphertext(_NativeObject):
+    """An encrypted array under one or more parties.
+
+    Ciphertexts are immutable: every :class:`Evaluator` operation returns a new
+    object rather than modifying its operands. Arrays longer than
+    :attr:`Context.slots` are split across :attr:`chunks`, which affects
+    rotation semantics; see :meth:`Evaluator.rotate_slots`.
+
+    Decryption requires a share from every party in :attr:`participants`.
+    """
+
     def __init__(
         self,
         handle: int,
@@ -1003,6 +1230,7 @@ class Ciphertext(_NativeObject):
         self._context = context
         self._shape = tuple(int(x) for x in shape)
         self._metadata: dict[str, Any] | None = None
+        self._tracking_cache: dict[str, float | bool] | None = None
         if validate:
             self._validate_metadata()
 
@@ -1011,12 +1239,23 @@ class Ciphertext(_NativeObject):
             self._metadata = _native.call_json(_native.cipher_metadata_fn, self._native_handle)
         return self._metadata
 
+    def _repr_fields(self) -> list[str]:
+        return [
+            f"shape={self.shape}",
+            f"dtype={self.dtype.name}",
+            f"level={self.level}",
+            f"scale=2**{math.log2(self.scale):.1f}",
+            f"participants={self.participants}",
+        ]
+
     @property
     def context(self) -> Context:
+        """The context this ciphertext belongs to."""
         return self._context
 
     @property
     def shape(self) -> tuple[int, ...]:
+        """Logical NumPy shape of the encrypted array."""
         return self._shape
 
     def _validate_metadata(self) -> None:
@@ -1035,73 +1274,92 @@ class Ciphertext(_NativeObject):
 
     @property
     def size(self) -> int:
+        """Total number of encrypted values, the product of :attr:`shape`."""
         return int(np.prod(self.shape, dtype=np.int64))
 
     @property
     def is_complex(self) -> bool:
+        """Whether this ciphertext holds complex rather than real data."""
         return bool(self._get_metadata()["complex"])
 
     @property
     def dtype(self) -> np.dtype[Any]:
+        """NumPy dtype that :meth:`Context.collective_decrypt` will return."""
         return np.dtype(np.complex128 if self.is_complex else np.float64)
 
     @property
     def chunks(self) -> int:
+        """Number of native ciphertexts backing this array."""
         return int(self._get_metadata()["chunks"])
 
     @property
     def chunk_count(self) -> int:
+        """Alias of :attr:`chunks`."""
         return self.chunks
 
     @property
     def slots(self) -> int:
+        """Slots per chunk; alias of :attr:`Context.slots`."""
         return self.context.slots
 
     @property
     def context_fingerprint(self) -> str:
+        """Fingerprint of the owning context, as recorded natively."""
         return str(self._get_metadata()["context_fingerprint"])
 
     @property
     def level(self) -> int:
+        """Remaining multiplicative level available to rescale or discard."""
         return int(self._get_metadata()["level"])
 
     @property
     def scale(self) -> float:
+        """Current CKKS scaling factor after any automatic rescaling."""
         return float(self._get_metadata()["scale"])
 
     @property
     def participants(self) -> tuple[str, ...]:
+        """Sorted party identifiers whose shares are required to decrypt."""
         return tuple(str(value) for value in self._get_metadata()["participants"])
 
     @property
     def artifact_id(self) -> str:
+        """Random identifier binding decryption shares to this exact ciphertext."""
         return str(self._get_metadata()["artifact_id"])
 
     @property
     def correctness_status(self) -> CorrectnessStatus:
+        """Whether this value is still inside the project's tested contract."""
         return _correctness_status(self.context, self._range_exceeded)
 
     @property
     def tracked_magnitude_bound(self) -> float:
+        """Conservative upper bound on the largest encrypted component."""
         return float(self._tracking["tracked_magnitude_bound"])
 
     @property
     def tracked_error_bound(self) -> float:
+        """Conservative upper bound on the accumulated approximation error."""
         return float(self._tracking["tracked_error_bound"])
 
     @property
     def range_margin_bits(self) -> float:
+        """Bits of headroom left before the tracked range is exceeded."""
         return float(self._tracking["range_margin_bits"])
 
     @property
     def _tracking(self) -> dict[str, float | bool]:
-        return _validated_tracking(self._get_metadata())
+        # Ciphertexts are immutable, so the validated view is computed once.
+        if self._tracking_cache is None:
+            self._tracking_cache = _validated_tracking(self._get_metadata())
+        return self._tracking_cache
 
     @property
     def _range_exceeded(self) -> bool:
         return bool(self._tracking["range_exceeded"])
 
     def to_bytes(self) -> bytes:
+        """Serialize this ciphertext together with its correctness metadata."""
         return _pack_native(
             self.context,
             "ciphertext",
@@ -1111,6 +1369,12 @@ class Ciphertext(_NativeObject):
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> Ciphertext:
+        """Restore a ciphertext produced by :meth:`to_bytes`.
+
+        Raises:
+            SerializationError: The artifact is malformed, or its recorded
+                correctness metadata disagrees with the native payload.
+        """
         metadata, native = _unpack_native(context, data, "ciphertext")
         shape = _validated_shape(metadata.get("shape"))
         handle, kind = _native.import_artifact(context._native_handle, native)
@@ -1123,6 +1387,13 @@ class Ciphertext(_NativeObject):
 
 
 class DecryptionShare(_NativeObject):
+    """One party's contribution towards decrypting a specific ciphertext.
+
+    Produced by :meth:`Party.partial_decrypt`. A share is bound to the exact
+    ciphertext it was derived from via :attr:`artifact_id`, so it cannot be
+    replayed against a different one. Shares reveal nothing individually.
+    """
+
     def __init__(self, handle: int, context: Context, party_id: str, artifact_id: str) -> None:
         super().__init__(handle)
         self._context = context
@@ -1133,19 +1404,26 @@ class DecryptionShare(_NativeObject):
         self._party_id = party_id
         self._artifact_id = artifact_id
 
+    def _repr_fields(self) -> list[str]:
+        return [f"party_id={self.party_id!r}", f"artifact_id={self.artifact_id!r}"]
+
     @property
     def context(self) -> Context:
+        """The context this share belongs to."""
         return self._context
 
     @property
     def party_id(self) -> str:
+        """Identifier of the party that produced this share."""
         return self._party_id
 
     @property
     def artifact_id(self) -> str:
+        """Identifier of the ciphertext this share may be combined with."""
         return self._artifact_id
 
     def to_bytes(self) -> bytes:
+        """Serialize this share for transport to the combining party."""
         return _pack_native(
             self.context,
             "decryption_share",
@@ -1155,6 +1433,7 @@ class DecryptionShare(_NativeObject):
 
     @classmethod
     def from_bytes(cls, context: Context, data: bytes) -> DecryptionShare:
+        """Restore a share produced by :meth:`to_bytes`."""
         metadata, native = _unpack_native(context, data, "decryption_share")
         party_id = _party_id_from_metadata(metadata)
         artifact_id = _artifact_id_from_metadata(metadata)
@@ -1166,11 +1445,29 @@ class DecryptionShare(_NativeObject):
 
 
 class Evaluator:
+    """Performs homomorphic operations on ciphertexts.
+
+    Operations are grouped by whether they need key material. Addition,
+    subtraction, scalar and plaintext multiplication, :meth:`drop_level` and
+    :meth:`rescale` work with ``Evaluator(context)`` alone. Multiplication,
+    non-zero rotation and conjugation additionally require an
+    :class:`EvaluationKeySet`, and raise :class:`~mkckks.MissingKeyError`
+    without one::
+
+        evaluator = mkckks.Evaluator(context, evaluation_keys)
+
+    The evaluator holds no native handle of its own and needs no closing.
+    """
+
     def __init__(self, context: Context, evaluation_keys: EvaluationKeySet | None = None) -> None:
+        """Bind an evaluator to ``context``, optionally with joint evaluation keys."""
         if evaluation_keys is not None:
             _require_context(context, evaluation_keys)
         self.context = context
         self.evaluation_keys = evaluation_keys
+
+    def __repr__(self) -> str:
+        return f"Evaluator(evaluation_keys={self.evaluation_keys is not None})"
 
     @staticmethod
     def _check_shape(left: Ciphertext, right: Ciphertext | Plaintext) -> None:
@@ -1240,6 +1537,7 @@ class Evaluator:
         return self._add_or_subtract(left, right, subtract=True)
 
     def multiply_scalar(self, ciphertext: Ciphertext, scalar: float | complex) -> Ciphertext:
+        """Multiply every slot by one constant. Requires no evaluation keys."""
         value = _normalized_scalar(scalar, self.context)
         return self._cipher_result(
             _native.multiply_scalar_fn,
@@ -1250,6 +1548,16 @@ class Evaluator:
         )
 
     def multiply_plaintext(self, ciphertext: Ciphertext, plaintext: Plaintext) -> Ciphertext:
+        """Multiply slot-wise by a same-shaped plaintext.
+
+        Requires no evaluation keys, unlike :meth:`multiply`, and needs a
+        positive :attr:`Ciphertext.level`. The pinned upstream operation
+        rescales the product automatically and normally consumes one level.
+
+        Raises:
+            ShapeMismatchError: The operands have different shapes.
+            LevelError: The ciphertext has no level left to consume.
+        """
         _require_context(self.context, plaintext)
         self._check_shape(ciphertext, plaintext)
         return self._cipher_result(
@@ -1261,6 +1569,18 @@ class Evaluator:
         )
 
     def multiply(self, left: Ciphertext, right: Ciphertext) -> Ciphertext:
+        """Multiply two ciphertexts and relinearize the product.
+
+        The result's participant set is the union of both operands'. The pinned
+        upstream operation rescales the product automatically, so a separate
+        :meth:`rescale` call is usually an immutable no-op.
+
+        Raises:
+            MissingKeyError: The evaluator has no keys, or the keys lack a
+                relinearization contribution for some participant.
+            ShapeMismatchError: The operands have different shapes.
+            LevelError: Either operand has no level left to consume.
+        """
         _require_context(self.context, right)
         self._check_shape(left, right)
         if self.evaluation_keys is None:
@@ -1278,23 +1598,72 @@ class Evaluator:
         )
 
     def drop_level(self, ciphertext: Ciphertext, levels: int = 1) -> Ciphertext:
+        """Discard ``levels`` moduli without changing the scale or the values.
+
+        Useful for aligning two ciphertexts before combining them.
+
+        Raises:
+            LevelError: ``levels`` exceeds the remaining level.
+        """
         validated_levels = _validated_exact_int(levels, "levels", 0, (1 << 31) - 1)
         return self._cipher_result(
             _native.drop_level_fn, ciphertext, ciphertext._native_handle, validated_levels
         )
 
     def rescale(self, ciphertext: Ciphertext, minimum_scale: float | None = None) -> Ciphertext:
-        value = self.context.parameters.scale if minimum_scale is None else float(minimum_scale)
+        """Divide out moduli to bring the scale back towards ``minimum_scale``.
+
+        Defaults to the context's parameter scale. Depending on the current
+        scale and threshold, this may consume zero, one, or several levels. A
+        zero-consumption request returns an independent ciphertext copy.
+
+        Raises:
+            InvalidParameterError: ``minimum_scale`` is not finite and positive.
+            LevelError: Rescaling would consume every remaining level or drop the
+                scale below the supported minimum.
+        """
+        if minimum_scale is None:
+            value = self.context.parameters.scale
+        else:
+            if isinstance(minimum_scale, (bool, np.bool_)):
+                raise InvalidParameterError("minimum_scale must be finite and positive")
+            try:
+                value = float(minimum_scale)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise InvalidParameterError("minimum_scale must be finite and positive") from exc
         if not math.isfinite(value) or value <= 0:
-            raise ValueError("minimum_scale must be finite and positive")
+            raise InvalidParameterError("minimum_scale must be finite and positive")
         return self._cipher_result(_native.rescale_fn, ciphertext, ciphertext._native_handle, value)
 
     def rotate_slots(self, ciphertext: Ciphertext, rotation: int) -> Ciphertext:
+        """Rotate slots left by ``rotation``, refusing multi-chunk ciphertexts.
+
+        Rotation acts within each chunk, never across chunk boundaries, so a
+        whole-array rotation is only well defined for a single chunk. This method
+        rejects anything larger rather than silently rotating per chunk; call
+        :meth:`rotate_each_chunk` when the per-chunk behaviour is what you want.
+
+        Raises:
+            InvalidParameterError: The ciphertext spans more than one chunk.
+            MissingKeyError: ``rotation`` is non-zero and no rotation key covers it.
+        """
         if ciphertext.chunks != 1:
-            raise ValueError("rotate_slots requires one chunk; use rotate_each_chunk explicitly")
+            raise InvalidParameterError(
+                "rotate_slots requires one chunk; use rotate_each_chunk explicitly"
+            )
         return self.rotate_each_chunk(ciphertext, rotation)
 
     def rotate_each_chunk(self, ciphertext: Ciphertext, rotation: int) -> Ciphertext:
+        """Rotate the slots of every chunk left by ``rotation``, independently.
+
+        Values do not move between chunks, so for a multi-chunk ciphertext this
+        is not a rotation of the flattened array. A ``rotation`` of zero is a
+        copy and needs no keys.
+
+        Raises:
+            MissingKeyError: ``rotation`` is non-zero and the evaluation keys do
+                not cover the required rotation amounts for every participant.
+        """
         validated_rotation = _validated_exact_int(rotation, "rotation", -(1 << 31), (1 << 31) - 1)
         normalized = validated_rotation % self.context.slots
         if normalized and self.evaluation_keys is None:
@@ -1311,6 +1680,16 @@ class Evaluator:
         )
 
     def conjugate(self, ciphertext: Ciphertext) -> Ciphertext:
+        """Conjugate every slot complex-wise.
+
+        This binding only supports conjugation at the context's maximum level,
+        because the pinned upstream revision indexes all moduli unconditionally.
+        Conjugate before consuming any level.
+
+        Raises:
+            MissingKeyError: The evaluation keys lack a conjugation contribution.
+            LevelError: The ciphertext is below the maximum level.
+        """
         if self.evaluation_keys is None:
             from .errors import MissingKeyError
 

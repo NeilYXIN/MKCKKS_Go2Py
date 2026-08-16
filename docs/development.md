@@ -10,19 +10,26 @@ The project environment is `.venv` at the repository root.
 Before opening a change, run:
 
 ```console
-uv run python scripts/verify_upstream.py
-go test ./mkckks ./mkrlwe ./mkbfv ./bridge
-go vet ./bridge ./mkckks ./mkrlwe
-go test -race -run 'Test(WorkerAndConcurrentOperationMatrix|ConcurrentEvaluationKeyUse|RegistryRejectsStaleHandles)$' ./bridge
-bash scripts/check_go_coverage.sh
-uv run ruff format --check src tests scripts examples benchmarks
-uv run ruff check src tests scripts examples benchmarks
-uv run mypy src/mkckks examples/comprehensive.py
-uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
-uv run reuse lint
-bash scripts/test_c_abi.sh
-uv run python scripts/verify_abi_symbols.py
+bash scripts/check.sh
 ```
+
+That script is the shared definition of the local core gate, and CI invokes the
+same stages. It runs, in order: the protected-upstream
+verification, Go tests and vet, the race subset, the Go bridge-coverage gate,
+`ruff format`/`ruff check`, `mypy`, `reuse lint`, `pytest -m "not release"`, the
+standalone C ABI suite, the ABI symbol snapshot, and `pip-audit` over the locked
+dependency closure. Pass stage names to run a subset, for example
+`bash scripts/check.sh lint types`. Every stage except `audit` works offline.
+
+CI also enables Python coverage reporting:
+
+```console
+uv run pytest -m "not release" --cov=src/mkckks --cov-branch --cov-report=term-missing
+```
+
+The workflow then executes the tutorial notebook and distributed example and
+runs platform-specific wheel builds and smoke tests; those jobs are not part of
+the portable local script.
 
 The pinned upstream `cnn` test has a pre-existing compile failure recorded in
 `baseline/environment.json`. The protected `mkbfv` package also has pre-existing
@@ -35,7 +42,10 @@ pull requests and pushes to `main`; it performs the correctness, race,
 coverage, C ABI, documentation-example, wheel-smoke, and Python 3.11–3.14
 checks. `Release candidate` is manual. It repeats CI, runs the focused release
 matrix, fuzzing, 10,000-cycle soak, reproducible platform builds, benchmarks,
-and compatibility-bundle generation, then creates a draft GitHub prerelease.
+a CycloneDX SBOM of the runtime dependency closure, and compatibility-bundle
+generation, then creates a draft GitHub prerelease. It refuses to start if the
+target version tag resolves to another commit, and creating and uploading the
+draft are separately idempotent, so a re-dispatch completes a partial upload.
 The first job resolves the selected target to one commit SHA; every platform
 artifact and the release tag use that same immutable commit. The workflow never
 publishes to PyPI and requires no project publishing credential.
@@ -47,6 +57,11 @@ ABI and its failure boundary are additionally exercised by the standalone C
 consumer.
 There are no scheduled jobs in v0.2. High-cost release tests run only when the
 maintainer deliberately dispatches the release-candidate workflow.
+
+Dependabot covers GitHub Actions and the `uv` lockfile. It deliberately does not
+cover Go modules: `go.mod` is byte-locked by `UPSTREAM.lock`, and the pinned
+Lattigo version is part of the certified upstream snapshot, so bumping it is an
+upstream re-certification decision rather than a routine dependency update.
 
 After the implementation branch is pushed, the maintainer enables Actions in
 **Settings → Actions → General**, opens a pull request, and merges only after CI

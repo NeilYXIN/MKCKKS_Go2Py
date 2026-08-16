@@ -19,6 +19,30 @@ binding.
 Server ID `0` is no longer modeled as a cryptographic party because upstream
 reserves it as the ciphertext constant component.
 
+## Reproduce the original notebook example
+
+The executable
+[`examples/original_notebook_verification.py`](../examples/original_notebook_verification.py)
+recreates the inputs and operation sequence from the last content-bearing
+revision of
+[`test.ipynb`](https://github.com/NeilYXIN/MKCKKS_Go2Py/blob/b8acb4f0a05d8337c43c8d6450811f0b104f9788/test.ipynb):
+`PN14QP439` public-key encryption, two-party addition, three-party addition,
+multiplication by `2.5`, and collective decryption. It also decrypts the three
+input ciphertexts separately and checks every result against a scale-aware
+CKKS error bound.
+
+From a source checkout with `uv` installed, run:
+
+```console
+uv sync --locked --all-groups
+uv run python examples/original_notebook_verification.py
+```
+
+The command exits with a nonzero status if any value, participant set, or
+precision bound check fails. Because CKKS encryption is randomized, exact
+decrypted errors vary between runs, but each run must print six `Result: PASS`
+lines and end with `All computations from the original notebook passed.`
+
 ## v0.1 to v0.2
 
 Remove the `hoisted=` argument from `multiply`, `rotate_slots`, and

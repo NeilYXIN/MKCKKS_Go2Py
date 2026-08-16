@@ -7,18 +7,9 @@ import numpy as np
 import pytest
 
 import mkckks
+from tests.conftest import decrypt
 
 pytestmark = pytest.mark.release
-
-
-def decrypt(
-    context: mkckks.Context,
-    ciphertext: mkckks.Ciphertext,
-    parties: list[mkckks.Party],
-) -> np.ndarray:
-    with ExitStack() as stack:
-        shares = [stack.enter_context(party.partial_decrypt(ciphertext)) for party in parties]
-        return context.collective_decrypt(ciphertext, shares)
 
 
 def assert_precision(actual: np.ndarray, expected: np.ndarray, bound: float) -> None:

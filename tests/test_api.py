@@ -7,21 +7,9 @@ import pytest
 
 import mkckks
 from mkckks._artifacts import pack, unpack
+from tests.conftest import decrypt
 from tests.precision_model import addition, assert_precision, local, scalar, transform
 from tests.precision_model import product as propagated_product
-
-
-def decrypt(
-    context: mkckks.Context,
-    ciphertext: mkckks.Ciphertext,
-    parties: list[mkckks.Party],
-) -> np.ndarray:
-    shares = [party.partial_decrypt(ciphertext) for party in parties]
-    try:
-        return context.collective_decrypt(ciphertext, shares)
-    finally:
-        for share in shares:
-            share.close()
 
 
 def test_real_and_complex_addition(context: mkckks.Context) -> None:
@@ -53,6 +41,7 @@ def test_scalar_and_plaintext_multiplication(context: mkckks.Context) -> None:
     )
     plaintext = context.encode(factors)
     multiplied = evaluator.multiply_plaintext(ciphertext, plaintext)
+    assert multiplied.level == ciphertext.level - 1
     assert_precision(
         decrypt(context, multiplied, [alice]),
         x * factors,
@@ -76,11 +65,14 @@ def test_ciphertext_multiplication_rotation_and_conjugation(context: mkckks.Cont
     summed = evaluator.add(encrypted_x, encrypted_y)
     summed_error = addition(summed, local(encrypted_x), local(encrypted_y))
     product = evaluator.multiply(summed, summed)
+    assert product.level == summed.level - 1
     product_bound = product_error = propagated_product(
         product, x + y, x + y, summed_error, summed_error
     )
     assert_precision(decrypt(context, product, [alice, bob]), (x + y) ** 2, product_bound)
     rescaled = evaluator.rescale(product)
+    assert rescaled.level == product.level
+    assert rescaled.artifact_id != product.artifact_id
     assert_precision(
         decrypt(context, rescaled, [alice, bob]),
         (x + y) ** 2,

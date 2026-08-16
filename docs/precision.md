@@ -46,9 +46,9 @@ range status is not a cryptographic-security certificate.
 
 The pinned upstream fractional complex-constant path is numerically unreliable.
 The bridge therefore encodes complex constants as constant plaintexts and uses
-the upstream plaintext multiplication path. This changes scale and may require
-an explicit rescale in a longer circuit. The path is covered by the independent
-upstream differential tests and does not modify upstream source.
+the upstream plaintext multiplication path, which rescales its result
+automatically. The path is covered by the independent upstream differential
+tests and does not modify upstream source.
 
 The pinned upstream `RescaleNew` also allocates a zero output when its threshold
 requires no modulus consumption. The bridge detects that no-level-change case
@@ -59,11 +59,12 @@ a technically positive but unusably low scale outside the wrapper's precision
 contract.
 
 For a circuit, record the starting level and scale of every ciphertext. Addition
-requires compatible scales; ciphertext multiplication increases scale and
-normally requires rescaling; dropping a level without rescaling discards a
-modulus but does not correct scale. A chain must never request more drops or
-rescales than the current `ciphertext.level`. The wrapper raises `LevelError`
-instead of allowing a native panic.
+requires compatible scales; ciphertext multiplication and plaintext
+multiplication rescale automatically, while dropping a level without rescaling
+discards a modulus but does not correct scale. An explicit rescale can consume
+zero or multiple levels. A chain must never request more drops or rescales than
+the current `ciphertext.level`. The wrapper raises `LevelError` instead of
+allowing a native panic.
 
 Measure precision against the unencrypted NumPy expression using both maximum
 absolute error and RMS error, separately for real and imaginary components.

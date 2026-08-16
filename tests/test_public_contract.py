@@ -20,17 +20,8 @@ import mkckks
 from mkckks import _native
 from mkckks._artifacts import pack, unpack
 from mkckks.api import _NativeObject
+from tests.conftest import decrypt_one
 from tests.precision_model import addition, assert_precision, local, transform
-
-
-def decrypt_one(
-    context: mkckks.Context, party: mkckks.Party, ciphertext: mkckks.Ciphertext
-) -> np.ndarray:
-    share = party.partial_decrypt(ciphertext)
-    try:
-        return context.collective_decrypt(ciphertext, [share])
-    finally:
-        share.close()
 
 
 def test_context_metadata_lifecycle_and_pickle(context: mkckks.Context) -> None:
@@ -48,6 +39,51 @@ def test_context_metadata_lifecycle_and_pickle(context: mkckks.Context) -> None:
     party.close()
     party.close()
     assert party.closed
+
+
+def test_repr_is_informative_and_never_raises_or_leaks(context: mkckks.Context) -> None:
+    party = mkckks.Party.generate(context, "contract-repr")
+    contribution = party.generate_evaluation_keys(relinearization=True)
+    keys = mkckks.EvaluationKeySet.combine(context, [contribution])
+    plaintext = context.encode(np.array([0.5, 0.25]))
+    ciphertext = party.encrypt(np.array([0.5, 0.25]))
+    share = party.partial_decrypt(ciphertext)
+    public_key = party.public_key
+    evaluator = mkckks.Evaluator(context, keys)
+
+    assert repr(context).startswith("Context(parameters=PN14QP439, slots=8192")
+    assert repr(party) == "Party(party_id='contract-repr')"
+    assert repr(contribution) == "EvaluationKeyContribution(party_id='contract-repr')"
+    assert repr(plaintext) == "Plaintext(shape=(2,), dtype=float64)"
+    assert repr(ciphertext) == (
+        "Ciphertext(shape=(2,), dtype=float64, level=5, scale=2**52.0, "
+        "participants=('contract-repr',))"
+    )
+    assert repr(share) == (
+        f"DecryptionShare(party_id='contract-repr', artifact_id='{ciphertext.artifact_id}')"
+    )
+    assert repr(evaluator) == "Evaluator(evaluation_keys=True)"
+    assert repr(mkckks.Evaluator(context)) == "Evaluator(evaluation_keys=False)"
+    # Types with no distinguishing state still identify themselves.
+    assert repr(public_key) == "PublicKey()"
+    assert repr(keys) == "EvaluationKeySet()"
+
+    # Never expose native handles or bulk data; a repr is for humans reading logs.
+    for value in (context, party, contribution, plaintext, ciphertext, share, public_key):
+        text = repr(value)
+        assert "handle" not in text.lower(), text
+        assert len(text) < 200, text
+
+    # An unusable handle must degrade rather than raise, because debuggers and
+    # logging call repr() unconditionally.
+    ciphertext._metadata = None
+    ciphertext._pid += 1
+    assert repr(ciphertext) == "Ciphertext(<unavailable>)"
+    ciphertext._pid -= 1
+
+    for value in (share, public_key, ciphertext, plaintext, keys, contribution, party):
+        value.close()
+        assert repr(value) == f"{type(value).__name__}(closed=True)"
 
 
 def test_public_key_plaintext_and_key_serialization(context: mkckks.Context) -> None:
@@ -161,6 +197,9 @@ def test_shape_missing_keys_levels_and_shares(context: mkckks.Context) -> None:
         evaluator.drop_level(one, context.max_level + 1)
     with pytest.raises(mkckks.MissingShareError, match="need 1"):
         context.collective_decrypt(one, [])
+    with pytest.raises(mkckks.MissingShareError) as nonparticipant:
+        alice.partial_decrypt(two)
+    assert isinstance(nonparticipant.value, mkckks.MKCKKSError)
     combined = evaluator.add(one, bob.encrypt([2.0]))
     share = alice.partial_decrypt(combined)
     with pytest.raises(mkckks.MissingShareError, match="duplicate"):
@@ -169,16 +208,48 @@ def test_shape_missing_keys_levels_and_shares(context: mkckks.Context) -> None:
 
 def test_input_and_parameter_validation(context: mkckks.Context) -> None:
     assert mkckks.Parameters.preset("pn15qp880").log_n == 15
-    with pytest.raises(ValueError, match="unknown preset"):
+    with pytest.raises(mkckks.InvalidParameterError, match="unknown preset") as unknown:
         mkckks.Parameters.preset("unknown")
+    assert isinstance(unknown.value, mkckks.MKCKKSError)
     literal = dict(log_n=14, log_slots=13, q=[17], p=[19, 23], scale=2.0, sigma=3.2)
-    with pytest.raises(ValueError, match="1-64 Q"):
+    with pytest.raises(mkckks.InvalidParameterError, match="1-64 Q") as invalid_q:
         mkckks.Parameters.from_literal(**{**literal, "q": []})
-    with pytest.raises(ValueError, match="finite and positive"):
+    assert isinstance(invalid_q.value, mkckks.MKCKKSError)
+    with pytest.raises(mkckks.InvalidParameterError, match="finite and positive") as invalid_scale:
         mkckks.Parameters.from_literal(**{**literal, "scale": float("nan")})
-    for values in ([], [True], [1], [float("inf")], np.array([], dtype=np.float64)):
-        with pytest.raises((ValueError, mkckks.InvalidDTypeError)):
+    assert isinstance(invalid_scale.value, mkckks.MKCKKSError)
+
+    for values, exception in (
+        ([], mkckks.InvalidParameterError),
+        ([True], mkckks.InvalidDTypeError),
+        ([1], mkckks.InvalidDTypeError),
+        ([float("inf")], mkckks.InvalidParameterError),
+        (np.array([], dtype=np.float64), mkckks.InvalidParameterError),
+    ):
+        with pytest.raises(exception) as invalid_values:
             context.encode(values)
+        assert isinstance(invalid_values.value, mkckks.MKCKKSError)
+
+
+@pytest.mark.parametrize(
+    ("case", "minimum_scale"),
+    [
+        ("bool", True),
+        ("numpy-bool", np.bool_(True)),
+        ("string", "bad"),
+        ("object", object()),
+        ("nan", float("nan")),
+        ("zero", 0),
+    ],
+)
+def test_rescale_validation_uses_public_error_taxonomy(
+    context: mkckks.Context, case: str, minimum_scale: object
+) -> None:
+    party = mkckks.Party.generate(context, f"contract-rescale-{case}")
+    ciphertext = party.encrypt([1.0])
+    with pytest.raises(mkckks.InvalidParameterError) as invalid:
+        mkckks.Evaluator(context).rescale(ciphertext, minimum_scale)  # type: ignore[arg-type]
+    assert isinstance(invalid.value, mkckks.MKCKKSError)
 
 
 def test_context_mismatch(context: mkckks.Context) -> None:
@@ -419,6 +490,36 @@ def test_slot_boundary_chunking(context: mkckks.Context) -> None:
     with pytest.raises(ValueError, match="one chunk"):
         mkckks.Evaluator(context).rotate_slots(ciphertext, 1)
     assert_precision(decrypt_one(context, party, ciphertext), values, local(ciphertext))
+
+
+@pytest.mark.slow
+def test_rotate_each_chunk_does_not_cross_chunk_boundaries(context: mkckks.Context) -> None:
+    party = mkckks.Party.generate(context, "contract-rotate-each-chunk")
+    contribution = party.generate_evaluation_keys(rotations=[1])
+    keys = mkckks.EvaluationKeySet.combine(context, [contribution])
+    evaluator = mkckks.Evaluator(context, keys)
+    slots = context.slots
+    # Two full chunks, so every slot of both chunks carries a distinct value.
+    values = np.arange(2 * slots, dtype=np.float64) / (2 * slots)
+    ciphertext = party.encrypt(values)
+    assert ciphertext.chunks == 2
+
+    rotated = evaluator.rotate_each_chunk(ciphertext, 1)
+    decoded = decrypt_one(context, party, rotated)
+    bound = transform(rotated, local(ciphertext), mkckks.PrecisionClass.ROTATION)
+
+    # Each chunk rotates left within itself; nothing moves across the boundary,
+    # so this is deliberately not np.roll(values, -1) over the whole array.
+    expected = np.concatenate([np.roll(values[:slots], -1), np.roll(values[slots:], -1)])
+    assert_precision(decoded, expected, bound)
+    assert decoded[slots - 1] == pytest.approx(values[0], abs=bound)
+    assert decoded[-1] == pytest.approx(values[slots], abs=bound)
+
+    zero_rotation = mkckks.Evaluator(context).rotate_each_chunk(ciphertext, 0)
+    assert_precision(decrypt_one(context, party, zero_rotation), values, local(ciphertext))
+
+    for item in (zero_rotation, rotated, ciphertext, keys, contribution, party):
+        item.close()
 
 
 @pytest.mark.slow

@@ -1,5 +1,9 @@
 # MKCKKS Go2Py
 
+[![CI](https://github.com/NeilYXIN/MKCKKS_Go2Py/actions/workflows/ci.yml/badge.svg)](https://github.com/NeilYXIN/MKCKKS_Go2Py/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT%20AND%20CC--BY--NC--2.0-lightgrey)](LICENSE)
+
 A NumPy-first Python binding for the multi-key CKKS research implementation
 [MKHE-KKLSS](https://github.com/SNUCP/MKHE-KKLSS), pinned to upstream commit
 `13fed55fd28270fb4345dd532da24b323ebc5ce3`.
@@ -74,6 +78,11 @@ The release targets macOS 12 or later on arm64 and x86_64, and
 manylinux_2_28 x86_64. A wheel installation does not require Go or a C
 compiler. Native Windows is not supported; see the
 [known limitations](docs/known-limitations.md) for WSL2 guidance.
+
+Support scope across the four Python versions is not uniform: the full
+correctness, race, coverage, and C ABI matrix runs on 3.12, while 3.11, 3.13, and
+3.14 are verified by installing the wheel and running an encrypted end-to-end
+smoke test. Report anything version-specific as a bug.
 
 To build from a source checkout, install `uv`, Go 1.26.5 with cgo, and a C
 compiler. On macOS, Homebrew can provide the tools:
@@ -197,8 +206,11 @@ treated as a permanent guarantee about later changes.
 .venv/bin/python scripts/verify_upstream.py
 GOCACHE=/tmp/mkckks-go-cache go test ./mkckks ./mkrlwe ./mkbfv ./bridge
 bash scripts/check_go_coverage.sh
-.venv/bin/pytest
+.venv/bin/pytest -m "not release"
 ```
+
+A bare `pytest` runs only the fast tier; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for the three test tiers.
 
 The upstream `cnn` test currently has a pre-existing compile error at the
 pinned commit; this is recorded in `baseline/environment.json` and is not
@@ -275,11 +287,20 @@ new v0.2 release-candidate suite.
 - [Serialization and compatibility](docs/serialization.md)
 - [API and artifact compatibility policy](docs/compatibility.md)
 - [Security and threat model](docs/security.md)
-- [Performance methodology and results](docs/performance.md)
+- [Performance methodology](docs/performance.md)
 - [Distributed-process example](examples/distributed.py)
 - [Comprehensive executable tutorial](examples/comprehensive.py)
+- [Original notebook verification](examples/original_notebook_verification.py)
 - [Migration guide](docs/migration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Contributor setup](docs/development.md)
+
+## Project
+
+- [Changelog](CHANGELOG.md) — what changed in each release
+- [Contributing](CONTRIBUTING.md) — how to build, test, and submit changes
+- [Security policy](SECURITY.md) — how to report a vulnerability
+- [Code of conduct](CODE_OF_CONDUCT.md)
+- [Citation](CITATION.cff) — how to cite this work
 
 See [NOTICE](NOTICE) and [LICENSE](LICENSE) before redistribution.

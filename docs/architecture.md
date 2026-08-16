@@ -19,9 +19,22 @@ failures, not normal error handling.
 
 Large arrays are split into CKKS-slot-sized chunks. Independent chunks use a
 bounded Go worker pool; the unchanged upstream implementation remains
-single-threaded within one ciphertext. Each chunk creates operation-local
-encoder/evaluator scratch, including relinearization decompositions, so shared
-evaluation-key sets remain read-only across workers and concurrent callers.
+single-threaded within one ciphertext. Each `Context` keeps `sync.Pool`s of
+ciphertext-only evaluators, partial-decryptors, and encoders. Encoders wipe
+their internal memory before returning to the pool. Encryptors and evaluators
+used for plaintext products are constructed per operation because the
+protected upstream types expose no supported way to scrub their private
+plaintext-bearing buffers. Concurrent chunks each get a distinct instance,
+and the GC can drain the safe pools under memory pressure. Relinearization
+still uses operation-local hoisted decompositions so shared evaluation-key sets
+remain read-only across workers and concurrent callers. Full collective
+decryption constructs a fresh decryptor: upstream `Decrypt` truncates an
+internal plaintext buffer to the ciphertext level and does not restore it.
+
+The native multiply ABI still accepts a 0/1 `hoisted` flag so existing C
+callers keep compiling. The flag is validated, then ignored; both values use
+operation-local hoisted decomposition. Python removed the corresponding
+argument in v0.2.
 
 Collective decryption uses upstream `PartialDecrypt`, subtracts the original
 `c0` to form a bound share delta, combines every delta once, and uses upstream

@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any, overload
 
 import numpy as np
 
+from .errors import InvalidParameterError, ShapeMismatchError
+
 if TYPE_CHECKING:
     from .api import Ciphertext, Parameters
 
@@ -51,7 +53,7 @@ def precision_bound(source: Parameters | Ciphertext, operation: PrecisionClass) 
         scale = float(source.scale)
         log_slots = int(source.log_slots)
     if not math.isfinite(scale) or scale <= 0:
-        raise ValueError("scale must be finite and positive")
+        raise InvalidParameterError("scale must be finite and positive")
     return math.exp2(-math.log2(scale) + log_slots + _SLACK_BITS[selected])
 
 
@@ -67,6 +69,7 @@ class PrecisionReport:
 
     @property
     def maximum_component_error(self) -> float:
+        """The larger of the real and imaginary maximum errors."""
         return max(self.maximum_real_error, self.maximum_imaginary_error)
 
 
@@ -75,7 +78,9 @@ def measure_precision(actual: Any, expected: Any) -> PrecisionReport:
     actual_array = np.asarray(actual, dtype=np.complex128)
     expected_array = np.asarray(expected, dtype=np.complex128)
     if actual_array.shape != expected_array.shape or actual_array.size == 0:
-        raise ValueError("actual and expected must be non-empty arrays with identical shapes")
+        raise ShapeMismatchError(
+            "actual and expected must be non-empty arrays with identical shapes"
+        )
     error = actual_array - expected_array
     maximum_real = float(np.max(np.abs(error.real)))
     maximum_imaginary = float(np.max(np.abs(error.imag)))

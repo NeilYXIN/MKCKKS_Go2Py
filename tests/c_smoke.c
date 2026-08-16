@@ -276,6 +276,47 @@ int main(void) {
         return 16;
     }
 
+    double short_real[1] = {0.5};
+    uint64_t short_ciphertext = 0;
+    if (require_success(mkckks_v1_encrypt(
+                            party, short_real, NULL, 1, 0, &short_ciphertext, &error),
+                        &error, "encrypt(short shape)") ||
+        remember(handles, &handle_count, short_ciphertext)) {
+        return 34;
+    }
+    baseline = mkckks_v1_live_handles();
+    if (require_failure(mkckks_v1_multiply(
+                            keyset, ciphertext, short_ciphertext, 0,
+                            &failed_output, &error),
+                        STATUS_INVALID, &error, baseline,
+                        "multiply(shape mismatch)")) {
+        return 35;
+    }
+
+    const char *other_party_id = "c-smoke-other-party";
+    uint64_t other_party = 0, other_ciphertext = 0;
+    if (require_success(mkckks_v1_party_generate(
+                            context, (uint8_t *)other_party_id,
+                            strlen(other_party_id), &other_party, &error),
+                        &error, "other party_generate") ||
+        remember(handles, &handle_count, other_party) ||
+        require_success(mkckks_v1_encrypt(
+                            other_party, real_values, imag_values, 2, 1,
+                            &other_ciphertext, &error),
+                        &error, "other party encrypt") ||
+        remember(handles, &handle_count, other_ciphertext)) {
+        return 36;
+    }
+    baseline = mkckks_v1_live_handles();
+    uint64_t failed_share = 0;
+    if (require_failure(mkckks_v1_partial_decrypt(
+                            party, other_ciphertext, &failed_share, &error),
+                        STATUS_SHARE, &error, baseline,
+                        "partial_decrypt(non-participant)") ||
+        failed_share != 0) {
+        return 37;
+    }
+
     uint64_t product = 0, dropped = 0, rescaled = 0, rotated = 0, conjugated = 0;
     if (require_success(mkckks_v1_multiply(
                             keyset, ciphertext, ciphertext, 0, &product, &error),

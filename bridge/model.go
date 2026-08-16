@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"github.com/ldsec/lattigo/v2/ckks"
@@ -46,10 +47,73 @@ type parameterLiteralDTO struct {
 type nativeContext struct {
 	literal     parameterLiteralDTO
 	params      mkckks.Parameters
+	ckksParams  ckks.Parameters
 	workers     int
 	fingerprint string
 	mu          sync.RWMutex
 	partyIDs    map[string]struct{}
+
+	// Ciphertext-only upstream engines are expensive to build and cheap to reuse. A single
+	// mkckks.Evaluator allocates a KeySwitcher holding a Decomposer, three
+	// SwitchingKey pools, and several ring polynomials, which dominated the cost
+	// of otherwise trivial operations when it was constructed per call. Evaluators
+	// used for plaintext products are deliberately not recycled because upstream
+	// MulPtxtNew can leave the encoded plaintext in private scratch. Encryptors are
+	// also constructed per call because their private encoder/plaintext buffers
+	// cannot be scrubbed through the public API. sync.Pool hands a distinct safe
+	// engine to each concurrent chunk, so scratch is not shared across goroutines.
+	//
+	// Decryptors are deliberately absent from the full-decryption path; see
+	// acquireDecryptor.
+	evaluators sync.Pool
+	decryptors sync.Pool
+	encoders   sync.Pool
+}
+
+func (ctx *nativeContext) acquireEvaluator() *mkckks.Evaluator {
+	if pooled, ok := ctx.evaluators.Get().(*mkckks.Evaluator); ok {
+		return pooled
+	}
+	return mkckks.NewEvaluator(ctx.params)
+}
+
+func (ctx *nativeContext) releaseEvaluator(evaluator *mkckks.Evaluator) {
+	ctx.evaluators.Put(evaluator)
+}
+
+// acquireDecryptor returns a decryptor for partial decryption only. Upstream
+// Decryptor.Decrypt truncates the decryptor's internal plaintext buffer to the
+// level of the ciphertext it decrypted and never restores it, so a recycled
+// decryptor would silently decrypt a later, higher-level ciphertext at the
+// stale lower level. PartialDecrypt never touches that buffer, so only that
+// path recycles; collectiveDecrypt constructs its own decryptor instead.
+func (ctx *nativeContext) acquireDecryptor() *mkckks.Decryptor {
+	if pooled, ok := ctx.decryptors.Get().(*mkckks.Decryptor); ok {
+		return pooled
+	}
+	return mkckks.NewDecryptor(ctx.params)
+}
+
+func (ctx *nativeContext) releaseDecryptor(decryptor *mkckks.Decryptor) {
+	ctx.decryptors.Put(decryptor)
+}
+
+// acquireEncoder returns a plaintext encoder. Upstream Encode wipes the
+// encoder's internal buffers before every use and reads the target scale from
+// the plaintext rather than from the parameters it was built with, so one
+// encoder serves every level and scale in this context.
+func (ctx *nativeContext) acquireEncoder() ckks.Encoder {
+	if pooled, ok := ctx.encoders.Get().(ckks.Encoder); ok {
+		return pooled
+	}
+	return ckks.NewEncoder(ctx.ckksParams)
+}
+
+func (ctx *nativeContext) releaseEncoder(encoder ckks.Encoder) {
+	// Encode wipes before use, but a pooled encoder would otherwise retain its
+	// most recently transformed input while idle in a long-lived context.
+	encoder.WipeInternalMemory()
+	ctx.encoders.Put(encoder)
 }
 
 type nativeParty struct {
@@ -106,28 +170,29 @@ type nativeShare struct {
 
 func newContext(raw []byte, workers int) (*nativeContext, error) {
 	if len(raw) == 0 || len(raw) > 1<<20 {
-		return nil, fmt.Errorf("parameter literal must be between 1 byte and 1 MiB")
+		return nil, statusFailure(statusInvalid, "", "parameter literal must be between 1 byte and 1 MiB")
 	}
 	var dto parameterLiteralDTO
 	if err := decodeParameterLiteral(raw, &dto); err != nil {
-		return nil, fmt.Errorf("invalid parameter literal: %w", err)
+		return nil, statusFailure(statusInvalid, "", fmt.Sprintf("invalid parameter literal: %v", err))
 	}
 	if dto.LogN < 4 || dto.LogN > 20 || dto.LogSlots < 1 || dto.LogSlots >= dto.LogN {
-		return nil, fmt.Errorf("invalid log_n/log_slots combination")
+		return nil, statusFailure(statusInvalid, "", "invalid log_n/log_slots combination")
 	}
 	if len(dto.Q) == 0 || len(dto.Q) > 64 || len(dto.P) < 2 || len(dto.P) > 8 || len(dto.P)%2 != 0 || !isFinitePositive(dto.Scale) || !isFinitePositive(dto.Sigma) {
-		return nil, fmt.Errorf("parameters require 1-64 Q moduli, 2-8 even-count P moduli, and finite positive scale/sigma")
+		return nil, statusFailure(statusInvalid, "",
+			"parameters require 1-64 Q moduli, 2-8 even-count P moduli, and finite positive scale/sigma")
 	}
 	literal := ckks.ParametersLiteral{LogN: dto.LogN, LogSlots: dto.LogSlots, Q: dto.Q, P: dto.P, Scale: dto.Scale, Sigma: dto.Sigma}
 	params, err := ckks.NewParametersFromLiteral(literal)
 	if err != nil {
-		return nil, fmt.Errorf("Lattigo rejected parameters: %w", err)
+		return nil, statusFailure(statusInvalid, "", fmt.Sprintf("Lattigo rejected parameters: %v", err))
 	}
 	if params.PCount() < 2 {
-		return nil, fmt.Errorf("MKCKKS requires at least two P moduli")
+		return nil, statusFailure(statusInvalid, "", "MKCKKS requires at least two P moduli")
 	}
 	if workers < 0 || workers > 1024 {
-		return nil, fmt.Errorf("workers must be zero (automatic) or between 1 and 1024")
+		return nil, statusFailure(statusInvalid, "", "workers must be zero (automatic) or between 1 and 1024")
 	}
 	if workers == 0 {
 		workers = runtime.NumCPU()
@@ -139,6 +204,14 @@ func newContext(raw []byte, workers int) (*nativeContext, error) {
 		literal: dto, params: mkckks.NewParameters(params), workers: workers,
 		partyIDs: make(map[string]struct{}),
 	}
+	// Encoders and plaintexts are built from plain CKKS parameters that differ
+	// from the multi-key ones only in carrying no CRS. Resolve them once here so
+	// the encode path does not rebuild them per chunk.
+	ckksParams, err := ckks.NewParameters(ctx.params.Parameters.Parameters, ctx.params.LogSlots(), ctx.params.Scale())
+	if err != nil {
+		return nil, statusFailure(statusInvalid, "", fmt.Sprintf("Lattigo rejected parameters: %v", err))
+	}
+	ctx.ckksParams = ckksParams
 	ctx.fingerprint = contextFingerprint(ctx)
 	return ctx, nil
 }
@@ -236,13 +309,26 @@ func randomArtifactID() ([16]byte, error) {
 	return id, err
 }
 
+func newOutputCipher(ctx *nativeContext, chunkCount, length int, isComplex bool) (*nativeCiphertext, error) {
+	out := &nativeCiphertext{
+		ctx: ctx, chunks: make([]*mkckks.Ciphertext, chunkCount),
+		length: length, isComplex: isComplex,
+	}
+	id, err := randomArtifactID()
+	if err != nil {
+		return nil, statusFailure(statusNative, "generate artifact ID", err.Error())
+	}
+	out.artifact = id
+	return out, nil
+}
+
 func validatePartyID(id string) error {
 	if id == "" || id == "0" || len(id) > 128 || !utf8.ValidString(id) {
-		return fmt.Errorf("party ID must be 1-128 bytes and cannot be reserved ID '0'")
+		return statusFailure(statusInvalid, "", "party ID must be 1-128 bytes and cannot be reserved ID '0'")
 	}
 	for _, b := range []byte(id) {
 		if b == 0 {
-			return fmt.Errorf("party ID cannot contain NUL")
+			return statusFailure(statusInvalid, "", "party ID cannot contain NUL")
 		}
 	}
 	return nil
@@ -264,7 +350,7 @@ func reservePartyID(ctx *nativeContext, id string) error {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	if _, exists := ctx.partyIDs[id]; exists {
-		return fmt.Errorf("duplicate party ID %q in this context", id)
+		return statusFailure(statusInvalid, "", fmt.Sprintf("duplicate party ID %q in this context", id))
 	}
 	ctx.partyIDs[id] = struct{}{}
 	return nil
@@ -288,7 +374,7 @@ func zeroParty(p *nativeParty) {
 
 func requireSameContext(a, b *nativeContext) error {
 	if a == nil || b == nil || a.fingerprint != b.fingerprint {
-		return fmt.Errorf("context/CRS fingerprint mismatch")
+		return statusFailure(statusContext, "", "context/CRS fingerprint mismatch")
 	}
 	return nil
 }
@@ -454,19 +540,30 @@ func parallelFor(count, workers int, fn func(int) error) error {
 	}
 	jobs := make(chan int)
 	errs := make(chan error, count)
+	// Homomorphic chunk work is expensive, so stop dispatching and skip queued
+	// indices once any chunk fails. Workers keep draining jobs so the dispatch
+	// loop below can never block on an abandoned channel.
+	var failed atomic.Bool
 	var wg sync.WaitGroup
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
+				if failed.Load() {
+					continue
+				}
 				if err := fn(i); err != nil {
+					failed.Store(true)
 					errs <- err
 				}
 			}
 		}()
 	}
 	for i := 0; i < count; i++ {
+		if failed.Load() {
+			break
+		}
 		jobs <- i
 	}
 	close(jobs)
@@ -481,16 +578,17 @@ func parallelFor(count, workers int, fn func(int) error) error {
 }
 
 func encryptValues(ctx *nativeContext, pk *mkrlwe.PublicKey, values [][]complex128, length int, isComplex bool) (*nativeCiphertext, error) {
-	result := &nativeCiphertext{ctx: ctx, chunks: make([]*mkckks.Ciphertext, len(values)), length: length, isComplex: isComplex}
-	id, err := randomArtifactID()
+	result, err := newOutputCipher(ctx, len(values), length, isComplex)
 	if err != nil {
-		return nil, fmt.Errorf("generate artifact ID: %w", err)
+		return nil, err
 	}
-	result.artifact = id
 	err = parallelFor(len(values), ctx.workers, func(i int) error {
+		// Upstream Encryptor retains its encoded plaintext in private buffers and
+		// exposes no scrub method, so it must not be kept in a context-level pool.
+		encryptor := mkckks.NewEncryptor(ctx.params)
 		msg := mkckks.NewMessage(ctx.params)
 		copy(msg.Value, values[i])
-		result.chunks[i] = mkckks.NewEncryptor(ctx.params).EncryptMsgNew(msg, pk)
+		result.chunks[i] = encryptor.EncryptMsgNew(msg, pk)
 		return nil
 	})
 	if err == nil {
@@ -526,14 +624,13 @@ func binaryCipher(op string, left, right *nativeCiphertext) (*nativeCiphertext, 
 			return nil, statusFailure(statusLevel, op, fmt.Sprintf("ciphertext scales are incompatible: %.17g and %.17g", left.chunks[i].Scale, right.chunks[i].Scale))
 		}
 	}
-	out := &nativeCiphertext{ctx: left.ctx, chunks: make([]*mkckks.Ciphertext, len(left.chunks)), length: left.length, isComplex: left.isComplex || right.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), left.ctx.workers, func(i int) error {
-		eval := mkckks.NewEvaluator(left.ctx.params)
+		eval := left.ctx.acquireEvaluator()
+		defer left.ctx.releaseEvaluator(eval)
 		switch op {
 		case "add":
 			out.chunks[i] = eval.AddNew(left.chunks[i], right.chunks[i])
@@ -584,12 +681,10 @@ func compatibleScales(left, right float64) bool {
 func encodeForCipher(
 	ctx *nativeContext, values []complex128, level int, scale float64,
 ) (*ckks.Plaintext, error) {
-	params, err := ckks.NewParameters(ctx.params.Parameters.Parameters, ctx.params.LogSlots(), scale)
-	if err != nil {
-		return nil, fmt.Errorf("construct plaintext parameters: %w", err)
-	}
-	plaintext := ckks.NewPlaintext(params, level, scale)
-	ckks.NewEncoder(params).Encode(plaintext, values, ctx.params.LogSlots())
+	encoder := ctx.acquireEncoder()
+	defer ctx.releaseEncoder(encoder)
+	plaintext := ckks.NewPlaintext(ctx.ckksParams, level, scale)
+	encoder.Encode(plaintext, values, ctx.params.LogSlots())
 	return plaintext, nil
 }
 
@@ -600,17 +695,14 @@ func addPlaintextCipher(
 		return nil, err
 	}
 	if input.length != plaintext.length || len(input.chunks) != len(plaintext.values) {
-		return nil, fmt.Errorf("ciphertext/plaintext shape mismatch")
+		return nil, statusFailure(statusInvalid, "add plaintext", "ciphertext/plaintext shape mismatch")
 	}
-	out := &nativeCiphertext{
-		ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)),
-		length: input.length, isComplex: input.isComplex || plaintext.isComplex,
-	}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex || plaintext.isComplex,
+	)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
 		out.chunks[i] = input.chunks[i].CopyNew()
 		encoded, encodeErr := encodeForCipher(
@@ -679,16 +771,13 @@ func addScalarCipher(input *nativeCiphertext, scalar complex128, subtract bool) 
 
 func scalarCipher(input *nativeCiphertext, scalar complex128) (*nativeCiphertext, error) {
 	if math.IsNaN(real(scalar)) || math.IsInf(real(scalar), 0) || math.IsNaN(imag(scalar)) || math.IsInf(imag(scalar), 0) {
-		return nil, fmt.Errorf("scalar must be finite")
+		return nil, statusFailure(statusInvalid, "multiply scalar", "scalar must be finite")
 	}
-	out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex || imag(scalar) != 0}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex || imag(scalar) != 0)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
-		evaluator := mkckks.NewEvaluator(input.ctx.params)
 		if imag(scalar) != 0 || math.Trunc(real(scalar)) != real(scalar) {
 			// Upstream's complex fractional MultByConst path is not numerically
 			// reliable in this pinned revision. Encoding a constant plaintext and
@@ -698,9 +787,19 @@ func scalarCipher(input *nativeCiphertext, scalar complex128) (*nativeCiphertext
 			for slot := range message.Value {
 				message.Value[slot] = scalar
 			}
-			plaintext := mkckks.NewEncryptor(input.ctx.params).EncodeMsgNew(message)
+			plaintext, encodeErr := encodeForCipher(
+				input.ctx, message.Value, input.ctx.params.MaxLevel(), input.ctx.params.Scale(),
+			)
+			if encodeErr != nil {
+				return encodeErr
+			}
+			// MulPtxtNew can leave the encoded plaintext in evaluator scratch,
+			// which cannot be scrubbed through the protected upstream API.
+			evaluator := mkckks.NewEvaluator(input.ctx.params)
 			out.chunks[i] = evaluator.MulPtxtNew(input.chunks[i], plaintext)
 		} else {
+			evaluator := input.ctx.acquireEvaluator()
+			defer input.ctx.releaseEvaluator(evaluator)
 			out.chunks[i] = input.chunks[i].CopyNew()
 			evaluator.MultByConst(out.chunks[i], real(scalar), out.chunks[i])
 		}
@@ -744,25 +843,28 @@ func plaintextCipher(input *nativeCiphertext, plaintext *nativePlaintext) (*nati
 		return nil, err
 	}
 	if input.length != plaintext.length || len(input.chunks) != len(plaintext.values) {
-		return nil, fmt.Errorf("ciphertext/plaintext shape mismatch")
+		return nil, statusFailure(statusInvalid, "multiply plaintext", "ciphertext/plaintext shape mismatch")
 	}
 	for _, chunk := range input.chunks {
 		if chunk.Level() == 0 {
 			return nil, statusFailure(statusLevel, "multiply plaintext", "ciphertext/plaintext multiplication requires a positive level")
 		}
 	}
-	out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex || plaintext.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex || plaintext.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
-		msg := mkckks.NewMessage(input.ctx.params)
-		copy(msg.Value, plaintext.values[i])
-		encoder := mkckks.NewEncryptor(input.ctx.params)
-		pt := encoder.EncodeMsgNew(msg)
-		out.chunks[i] = mkckks.NewEvaluator(input.ctx.params).MulPtxtNew(input.chunks[i], pt)
+		pt, encodeErr := encodeForCipher(
+			input.ctx, plaintext.values[i], input.ctx.params.MaxLevel(), input.ctx.params.Scale(),
+		)
+		if encodeErr != nil {
+			return encodeErr
+		}
+		// This evaluator is intentionally one-shot; MulPtxtNew can retain pt in
+		// private scratch that the bridge has no supported way to clear.
+		eval := mkckks.NewEvaluator(input.ctx.params)
+		out.chunks[i] = eval.MulPtxtNew(input.chunks[i], pt)
 		return nil
 	})
 	if err == nil {
@@ -811,7 +913,7 @@ func generateEvalContribution(party *nativeParty, relinearization bool, rotation
 
 func combineEvalContributions(contributions []*nativeEvalContribution) (*nativeEvalSet, error) {
 	if len(contributions) == 0 {
-		return nil, fmt.Errorf("at least one evaluation-key contribution is required")
+		return nil, statusFailure(statusKey, "", "at least one evaluation-key contribution is required")
 	}
 	ctx := contributions[0].ctx
 	result := &nativeEvalSet{
@@ -826,7 +928,8 @@ func combineEvalContributions(contributions []*nativeEvalContribution) (*nativeE
 			return nil, err
 		}
 		if _, exists := result.ids[contribution.id]; exists {
-			return nil, fmt.Errorf("duplicate evaluation-key contribution for %q", contribution.id)
+			return nil, statusFailure(statusKey, "",
+				fmt.Sprintf("duplicate evaluation-key contribution for %q", contribution.id))
 		}
 		result.ids[contribution.id] = struct{}{}
 		if contribution.rlin != nil {
@@ -848,7 +951,7 @@ func requireEvaluationCoverage(ciphertext *nativeCiphertext, keys *nativeEvalSet
 	}
 	for id := range ciphertext.chunks[0].IDSet().Value {
 		if _, ok := keys.ids[id]; !ok {
-			return fmt.Errorf("evaluation keys missing participant %q", id)
+			return statusFailure(statusKey, "", fmt.Sprintf("evaluation keys missing participant %q", id))
 		}
 	}
 	return nil
@@ -860,7 +963,7 @@ func requireRelinearizationKeys(ciphertext *nativeCiphertext, keys *nativeEvalSe
 	}
 	for id := range ciphertext.chunks[0].IDSet().Value {
 		if _, ok := keys.rlin.Value[id]; !ok {
-			return fmt.Errorf("relinearization key missing participant %q", id)
+			return statusFailure(statusKey, "", fmt.Sprintf("relinearization key missing participant %q", id))
 		}
 	}
 	return nil
@@ -890,11 +993,12 @@ func requireRotationKeys(ciphertext *nativeCiphertext, keys *nativeEvalSet, rota
 	for id := range ciphertext.chunks[0].IDSet().Value {
 		partyKeys, ok := keys.rot.Value[id]
 		if !ok {
-			return fmt.Errorf("rotation keys missing participant %q", id)
+			return statusFailure(statusKey, "", fmt.Sprintf("rotation keys missing participant %q", id))
 		}
 		for _, bit := range bits {
 			if _, ok := partyKeys[bit]; !ok {
-				return fmt.Errorf("rotation key %d missing participant %q", bit, id)
+				return statusFailure(statusKey, "",
+					fmt.Sprintf("rotation key %d missing participant %q", bit, id))
 			}
 		}
 	}
@@ -907,7 +1011,7 @@ func requireConjugationKeys(ciphertext *nativeCiphertext, keys *nativeEvalSet) e
 	}
 	for id := range ciphertext.chunks[0].IDSet().Value {
 		if _, ok := keys.conj.Value[id]; !ok {
-			return fmt.Errorf("conjugation key missing participant %q", id)
+			return statusFailure(statusKey, "", fmt.Sprintf("conjugation key missing participant %q", id))
 		}
 	}
 	return nil
@@ -918,7 +1022,7 @@ func multiplyCipher(left, right *nativeCiphertext, keys *nativeEvalSet, hoisted 
 		return nil, err
 	}
 	if left.length != right.length || len(left.chunks) != len(right.chunks) {
-		return nil, fmt.Errorf("ciphertext shape/length mismatch")
+		return nil, statusFailure(statusInvalid, "multiply", "ciphertext shape/length mismatch")
 	}
 	for i := range left.chunks {
 		if left.chunks[i].Level() == 0 || right.chunks[i].Level() == 0 {
@@ -931,14 +1035,13 @@ func multiplyCipher(left, right *nativeCiphertext, keys *nativeEvalSet, hoisted 
 	if err := requireRelinearizationKeys(right, keys); err != nil {
 		return nil, err
 	}
-	out := &nativeCiphertext{ctx: left.ctx, chunks: make([]*mkckks.Ciphertext, len(left.chunks)), length: left.length, isComplex: left.isComplex || right.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), left.ctx.workers, func(i int) error {
-		eval := mkckks.NewEvaluator(left.ctx.params)
+		eval := left.ctx.acquireEvaluator()
+		defer left.ctx.releaseEvaluator(eval)
 		// Upstream MulRelinNew stores decomposition scratch in the shared key
 		// set. Use operation-local hoisted forms for both public modes so a key
 		// set remains immutable and safe across chunks and concurrent callers.
@@ -956,16 +1059,21 @@ func multiplyCipher(left, right *nativeCiphertext, keys *nativeEvalSet, hoisted 
 			left.tracking, right.tracking,
 		)
 	}
-	_ = hoisted // Retained for ABI/API compatibility; both paths are now race-free.
+	// The ABI still accepts a 0/1 hoisted flag so existing C callers keep
+	// compiling. The flag is validated at the export boundary and then ignored:
+	// both values use operation-local hoisted decomposition, which is the only
+	// race-free path against a shared key set in this pinned upstream revision.
+	_ = hoisted
 	return out, err
 }
 
 func rescalePlan(ctx *nativeContext, level int, scale, minimumScale float64) (int, float64, error) {
 	if !isFinitePositive(minimumScale) {
-		return 0, 0, fmt.Errorf("minimum scale must be finite and positive")
+		return 0, 0, statusFailure(statusLevel, "rescale", "minimum scale must be finite and positive")
 	}
 	if level <= 0 || level > ctx.params.MaxLevel() || !isFinitePositive(scale) {
-		return 0, 0, fmt.Errorf("cannot rescale a ciphertext at level %d", level)
+		return 0, 0, statusFailure(statusLevel, "rescale",
+			fmt.Sprintf("cannot rescale a ciphertext at level %d", level))
 	}
 	resultScale := scale
 	consumed := 0
@@ -974,33 +1082,33 @@ func rescalePlan(ctx *nativeContext, level int, scale, minimumScale float64) (in
 		consumed++
 	}
 	if consumed > level {
-		return 0, 0, fmt.Errorf("rescale threshold would consume all remaining levels")
+		return 0, 0, statusFailure(statusLevel, "rescale", "rescale threshold would consume all remaining levels")
 	}
 	minimumSupportedScale := ctx.params.Scale() / 2
 	if resultScale < minimumSupportedScale {
-		return 0, 0, fmt.Errorf(
+		return 0, 0, statusFailure(statusLevel, "rescale", fmt.Sprintf(
 			"rescale would reduce scale %.17g below supported minimum %.17g",
 			resultScale,
 			minimumSupportedScale,
-		)
+		))
 	}
 	return consumed, resultScale, nil
 }
 
 func levelCipher(input *nativeCiphertext, operation string, value float64) (*nativeCiphertext, error) {
-	out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
-		eval := mkckks.NewEvaluator(input.ctx.params)
+		eval := input.ctx.acquireEvaluator()
+		defer input.ctx.releaseEvaluator(eval)
 		switch operation {
 		case "drop":
 			levels := int(value)
 			if levels < 0 || levels > input.chunks[i].Level() {
-				return fmt.Errorf("cannot drop %d levels from level %d", levels, input.chunks[i].Level())
+				return statusFailure(statusLevel, "drop level",
+					fmt.Sprintf("cannot drop %d levels from level %d", levels, input.chunks[i].Level()))
 			}
 			out.chunks[i] = eval.DropLevelNew(input.chunks[i], levels)
 		case "rescale":
@@ -1053,12 +1161,10 @@ func rotateCipher(input *nativeCiphertext, keys *nativeEvalSet, rotation int, ho
 		normalized += input.ctx.params.Slots()
 	}
 	if normalized == 0 {
-		out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex}
-		id, err := randomArtifactID()
+		out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
 		if err != nil {
 			return nil, err
 		}
-		out.artifact = id
 		for i := range input.chunks {
 			out.chunks[i] = input.chunks[i].CopyNew()
 		}
@@ -1068,14 +1174,13 @@ func rotateCipher(input *nativeCiphertext, keys *nativeEvalSet, rotation int, ho
 	if err := requireRotationKeys(input, keys, rotation); err != nil {
 		return nil, err
 	}
-	out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
-		eval := mkckks.NewEvaluator(input.ctx.params)
+		eval := input.ctx.acquireEvaluator()
+		defer input.ctx.releaseEvaluator(eval)
 		if hoisted && normalized&(normalized-1) == 0 {
 			h := eval.HoistedForm(input.chunks[i])
 			out.chunks[i] = eval.RotateHoistedNew(input.chunks[i], normalized, h, keys.rot)
@@ -1115,14 +1220,14 @@ func conjugateCipher(input *nativeCiphertext, keys *nativeEvalSet) (*nativeCiphe
 	if err := requireConjugationKeys(input, keys); err != nil {
 		return nil, err
 	}
-	out := &nativeCiphertext{ctx: input.ctx, chunks: make([]*mkckks.Ciphertext, len(input.chunks)), length: input.length, isComplex: input.isComplex}
-	id, err := randomArtifactID()
+	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
 	if err != nil {
 		return nil, err
 	}
-	out.artifact = id
 	err = parallelFor(len(out.chunks), input.ctx.workers, func(i int) error {
-		out.chunks[i] = mkckks.NewEvaluator(input.ctx.params).ConjugateNew(input.chunks[i], keys.conj)
+		eval := input.ctx.acquireEvaluator()
+		defer input.ctx.releaseEvaluator(eval)
+		out.chunks[i] = eval.ConjugateNew(input.chunks[i], keys.conj)
 		return nil
 	})
 	if err == nil {
@@ -1144,13 +1249,16 @@ func partialDecrypt(party *nativeParty, ciphertext *nativeCiphertext) (*nativeSh
 		return nil, err
 	}
 	if !ciphertext.chunks[0].IDSet().Has(party.sk.ID) {
-		return nil, fmt.Errorf("ciphertext does not contain participant %q", party.sk.ID)
+		return nil, statusFailure(statusShare, "partial decrypt",
+			fmt.Sprintf("ciphertext does not contain participant %q", party.sk.ID))
 	}
 	share := &nativeShare{ctx: party.ctx, partyID: party.sk.ID, cipherID: ciphertext.artifact, length: ciphertext.length, deltas: make([]*ring.Poly, len(ciphertext.chunks))}
 	err := parallelFor(len(ciphertext.chunks), party.ctx.workers, func(i int) error {
+		decryptor := party.ctx.acquireDecryptor()
+		defer party.ctx.releaseDecryptor(decryptor)
 		original := ciphertext.chunks[i]
 		partial := original.CopyNew()
-		mkckks.NewDecryptor(party.ctx.params).PartialDecrypt(partial, party.sk)
+		decryptor.PartialDecrypt(partial, party.sk)
 		delta := original.Value["0"].CopyNew()
 		party.ctx.params.RingQ().SubLvl(original.Level(), partial.Value["0"], original.Value["0"], delta)
 		share.deltas[i] = delta
@@ -1162,7 +1270,8 @@ func partialDecrypt(party *nativeParty, ciphertext *nativeCiphertext) (*nativeSh
 func collectiveDecrypt(ciphertext *nativeCiphertext, shares []*nativeShare) ([]complex128, error) {
 	participants := ciphertext.chunks[0].IDSet()
 	if len(shares) != participants.Size() {
-		return nil, fmt.Errorf("need %d unique shares, received %d", participants.Size(), len(shares))
+		return nil, statusFailure(statusShare, "",
+			fmt.Sprintf("need %d unique shares, received %d", participants.Size(), len(shares)))
 	}
 	seen := make(map[string]struct{})
 	for _, share := range shares {
@@ -1170,13 +1279,13 @@ func collectiveDecrypt(ciphertext *nativeCiphertext, shares []*nativeShare) ([]c
 			return nil, err
 		}
 		if share.cipherID != ciphertext.artifact || share.length != ciphertext.length || len(share.deltas) != len(ciphertext.chunks) {
-			return nil, fmt.Errorf("share is bound to a different ciphertext")
+			return nil, statusFailure(statusShare, "", "share is bound to a different ciphertext")
 		}
 		if !participants.Has(share.partyID) {
-			return nil, fmt.Errorf("unexpected share from %q", share.partyID)
+			return nil, statusFailure(statusShare, "", fmt.Sprintf("unexpected share from %q", share.partyID))
 		}
 		if _, ok := seen[share.partyID]; ok {
-			return nil, fmt.Errorf("duplicate share from %q", share.partyID)
+			return nil, statusFailure(statusShare, "", fmt.Sprintf("duplicate share from %q", share.partyID))
 		}
 		seen[share.partyID] = struct{}{}
 	}
@@ -1185,10 +1294,13 @@ func collectiveDecrypt(ciphertext *nativeCiphertext, shares []*nativeShare) ([]c
 		combined := &mkckks.Ciphertext{Ciphertext: &mkrlwe.Ciphertext{Value: map[string]*ring.Poly{"0": encrypted.Value["0"].CopyNew()}}, Scale: encrypted.Scale}
 		for _, share := range shares {
 			if len(share.deltas[chunkIndex].Coeffs) != encrypted.Level()+1 {
-				return nil, fmt.Errorf("decryption share level does not match ciphertext")
+				return nil, statusFailure(statusShare, "", "decryption share level does not match ciphertext")
 			}
 			ciphertext.ctx.params.RingQ().AddLvl(encrypted.Level(), combined.Value["0"], share.deltas[chunkIndex], combined.Value["0"])
 		}
+		// Decrypt truncates the decryptor's internal plaintext to the ciphertext
+		// level and never restores it, so this path always constructs a fresh
+		// decryptor instead of recycling the PartialDecrypt pool.
 		message := mkckks.NewDecryptor(ciphertext.ctx.params).Decrypt(combined, mkrlwe.NewSecretKeySet())
 		values = append(values, message.Value...)
 	}
@@ -1209,30 +1321,32 @@ func serializePoly(poly *ring.Poly) ([]byte, error) { return poly.MarshalBinary(
 func validateSerializedPoly(data []byte) error {
 	const headerSize = uint64(4)
 	if len(data) < int(headerSize) {
-		return fmt.Errorf("invalid polynomial encoding: truncated header")
+		return statusFailure(statusSerial, "", "invalid polynomial encoding: truncated header")
 	}
 	logN := data[0]
 	if logN < 4 || logN > 20 {
-		return fmt.Errorf("invalid polynomial encoding: log_n %d is outside [4, 20]", logN)
+		return statusFailure(statusSerial, "",
+			fmt.Sprintf("invalid polynomial encoding: log_n %d is outside [4, 20]", logN))
 	}
 	modulusCount := uint64(data[1])
 	if modulusCount == 0 {
-		return fmt.Errorf("invalid polynomial encoding: modulus count is zero")
+		return statusFailure(statusSerial, "", "invalid polynomial encoding: modulus count is zero")
 	}
 	if data[2] > 1 || data[3] > 1 {
-		return fmt.Errorf("invalid polynomial encoding: Boolean flags must be 0 or 1")
+		return statusFailure(statusSerial, "", "invalid polynomial encoding: Boolean flags must be 0 or 1")
 	}
 	coefficientCount := (uint64(1) << logN) * modulusCount
 	expectedLength := headerSize + coefficientCount*8
 	if expectedLength > maxArtifactSize {
-		return fmt.Errorf("invalid polynomial encoding: declared size exceeds artifact limit")
+		return statusFailure(statusSerial, "",
+			"invalid polynomial encoding: declared size exceeds artifact limit")
 	}
 	if uint64(len(data)) != expectedLength {
-		return fmt.Errorf(
+		return statusFailure(statusSerial, "", fmt.Sprintf(
 			"invalid polynomial encoding: length %d does not match declared length %d",
 			len(data),
 			expectedLength,
-		)
+		))
 	}
 	return nil
 }
@@ -1262,7 +1376,7 @@ func decodeLengthPrefixed(reader *bytes.Reader, maximum uint64) ([]byte, error) 
 		return nil, err
 	}
 	if size > maximum || size > uint64(reader.Len()) {
-		return nil, fmt.Errorf("invalid serialized field length %d", size)
+		return nil, statusFailure(statusSerial, "", fmt.Sprintf("invalid serialized field length %d", size))
 	}
 	data := make([]byte, size)
 	_, err := reader.Read(data)

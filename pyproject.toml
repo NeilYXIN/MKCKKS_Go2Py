@@ -12,6 +12,16 @@ license = "MIT AND CC-BY-NC-2.0"
 license-files = ["LICENSE", "LICENSES/*", "NOTICE"]
 authors = [{name = "UofA Sustainable Computing Research Group"}]
 dependencies = ["numpy>=1.26"]
+keywords = [
+  "homomorphic-encryption",
+  "ckks",
+  "multi-key",
+  "mkhe",
+  "lattigo",
+  "cryptography",
+  "privacy",
+  "numpy",
+]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
@@ -26,6 +36,7 @@ classifiers = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/NeilYXIN/MKCKKS_Go2Py"
 Repository = "https://github.com/NeilYXIN/MKCKKS_Go2Py"
 Issues = "https://github.com/NeilYXIN/MKCKKS_Go2Py/issues"
 Documentation = "https://github.com/NeilYXIN/MKCKKS_Go2Py/tree/main/docs"
@@ -89,7 +100,9 @@ sdist.exclude = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
+# The default is the fast contributor loop. A command-line -m overrides this,
+# which is how CI selects the fuller matrix with -m "not release".
+addopts = '-ra --strict-markers -m "not release and not slow"'
 testpaths = ["tests"]
 markers = [
   "slow: exercises full cryptographic parameter sets",

@@ -16,16 +16,7 @@ import pytest
 
 import mkckks
 from mkckks._artifacts import pack, unpack
-
-
-def decrypt(
-    context: mkckks.Context,
-    ciphertext: mkckks.Ciphertext,
-    parties: list[mkckks.Party],
-) -> np.ndarray:
-    with ExitStack() as stack:
-        shares = [stack.enter_context(party.partial_decrypt(ciphertext)) for party in parties]
-        return context.collective_decrypt(ciphertext, shares)
+from tests.conftest import decrypt
 
 
 def assert_within_contract(
@@ -409,6 +400,7 @@ def test_array_layout_and_numeric_edge_patterns(preset: str) -> None:
                 assert_within_contract(context, restored, [party], expected)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("preset", ["PN14QP439", "PN15QP880"])
 def test_deterministic_generated_circuits(preset: str) -> None:
     default_count = 20
@@ -531,6 +523,7 @@ def test_deterministic_generated_circuits(preset: str) -> None:
                 ciphertext.close()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("preset", ["PN14QP439", "PN15QP880"])
 def test_ordered_operation_pairs(preset: str) -> None:
     operation_names = (

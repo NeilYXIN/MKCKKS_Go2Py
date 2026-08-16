@@ -15,6 +15,12 @@ writers emit only their current version. Context fingerprints bind every
 dependent artifact to the exact CRS, parameter literal, upstream commit, and
 ABI.
 
+The `mkckks_v1_multiply` `hoisted` flag remains in the v1 signature so existing
+C callers keep compiling. Values other than 0 or 1 are rejected; both accepted
+values use operation-local hoisted decomposition. The flag does not select a
+code path and will not be honored in a later v1 revision. Python removed the
+corresponding argument in v0.2.
+
 No scheduled release assumes upstream relicensing. Unless the upstream terms
 change independently, the bundled distribution remains noncommercial
 source-available even when its wrapper API becomes stable.
