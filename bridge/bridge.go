@@ -242,23 +242,29 @@ func metadataForEntry(entry registryEntry) map[string]interface{} {
 		value := entry.value.(*nativeParty)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
 		metadata["party_id"] = value.sk.ID
+		metadata["key_fingerprint"] = hex.EncodeToString(value.identity[:])
 	case kindPublicKey:
 		value := entry.value.(*nativePublicKey)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
 		metadata["party_id"] = value.pk.ID
+		metadata["key_fingerprint"] = hex.EncodeToString(value.identity[:])
 	case kindEvalContribution:
 		value := entry.value.(*nativeEvalContribution)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
 		metadata["party_id"] = value.id
+		metadata["key_fingerprint"] = hex.EncodeToString(value.identity[:])
 	case kindEvalSet:
 		value := entry.value.(*nativeEvalSet)
-		ids := make([]string, 0, len(value.ids))
-		for id := range value.ids {
+		ids := make([]string, 0, len(value.identities))
+		participantKeys := make(map[string]string, len(value.identities))
+		for id, identity := range value.identities {
 			ids = append(ids, id)
+			participantKeys[id] = hex.EncodeToString(identity[:])
 		}
 		sort.Strings(ids)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
 		metadata["participants"] = ids
+		metadata["participant_keys"] = participantKeys
 	case kindPlaintext:
 		value := entry.value.(*nativePlaintext)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
@@ -280,6 +286,11 @@ func metadataForEntry(entry registryEntry) map[string]interface{} {
 		metadata["level"] = value.chunks[0].Level()
 		metadata["scale"] = value.chunks[0].Scale
 		metadata["participants"] = participantIDs(value)
+		participantKeys := make(map[string]string, len(value.identities))
+		for id, identity := range value.identities {
+			participantKeys[id] = hex.EncodeToString(identity[:])
+		}
+		metadata["participant_keys"] = participantKeys
 		metadata["artifact_id"] = hex.EncodeToString(value.artifact[:])
 		metadata["tracked_magnitude_bound"] = value.tracking.magnitudeBound
 		metadata["tracked_error_bound"] = value.tracking.errorBound
@@ -291,6 +302,7 @@ func metadataForEntry(entry registryEntry) map[string]interface{} {
 		value := entry.value.(*nativeShare)
 		metadata["context_fingerprint"] = value.ctx.fingerprint
 		metadata["party_id"] = value.partyID
+		metadata["key_fingerprint"] = hex.EncodeToString(value.identity[:])
 		metadata["artifact_id"] = hex.EncodeToString(value.cipherID[:])
 		metadata["length"] = value.length
 		metadata["chunks"] = len(value.deltas)
@@ -416,7 +428,9 @@ func mkckks_v1_party_public_key(partyHandle C.uint64_t, output *C.uint64_t, erro
 		if err != nil {
 			return statusHandle, err
 		}
-		return statusOK, registerObject(output, kindPublicKey, &nativePublicKey{ctx: party.ctx, pk: clonePublicKey(party.pk)})
+		return statusOK, registerObject(output, kindPublicKey, &nativePublicKey{
+			ctx: party.ctx, pk: clonePublicKey(party.pk), identity: party.identity,
+		})
 	})
 }
 

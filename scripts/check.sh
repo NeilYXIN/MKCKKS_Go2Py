@@ -94,8 +94,9 @@ stage lint run ruff check src tests scripts examples benchmarks
 stage types run mypy src/mkckks examples/comprehensive.py \
   examples/original_notebook_verification.py scripts/generate_compatibility_bundle.py
 stage licence run reuse lint
-# CI runs the slow tier too; -m matches .github/workflows/ci.yml.
-stage pytest run pytest -m "not release"
+# The shared Python contract includes the slow tier and enforces branch coverage.
+stage pytest run pytest -m "not release" \
+  --cov=src/mkckks --cov-branch --cov-report=term-missing
 stage cabi bash scripts/test_c_abi.sh
 stage abi $python_bin scripts/verify_abi_symbols.py
 stage audit audit_locked_dependencies

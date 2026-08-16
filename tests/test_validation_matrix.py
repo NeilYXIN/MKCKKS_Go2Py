@@ -9,13 +9,38 @@ import numpy as np
 import pytest
 
 import mkckks
-from mkckks import api
+from mkckks import _native, api
+
+
+@pytest.mark.parametrize(
+    ("implementation", "version", "gil_disabled", "message"),
+    [
+        ("cpython", (3, 13), False, None),
+        ("pypy", (3, 13), False, "requires CPython"),
+        ("cpython", (3, 12), False, "not 3.12"),
+        ("cpython", (3, 13), True, "free-threaded"),
+    ],
+)
+def test_runtime_support_contract(
+    implementation: str,
+    version: tuple[int, int],
+    gil_disabled: bool,
+    message: str | None,
+) -> None:
+    error = _native._runtime_compatibility_error(implementation, version, gil_disabled)
+    if message is None:
+        assert error is None
+    else:
+        assert error is not None
+        assert message in error
 
 
 @pytest.mark.parametrize(
     "kwargs",
     [
         {"max_chunks": 0},
+        {"max_chunks": 65},
+        {"max_chunks": True},
         {"max_values": True},
         {"max_values": (1 << 26) + 1},
         {"max_artifact_bytes": 0},
@@ -49,8 +74,9 @@ def test_parameter_literal_type_matrix(changes: dict[str, Any]) -> None:
         "scale": 2.0,
         "sigma": 3.2,
     }
-    with pytest.raises(ValueError):
+    with pytest.raises(mkckks.InvalidParameterError) as invalid:
         mkckks.Parameters.from_literal(**{**literal, **changes})
+    assert isinstance(invalid.value, mkckks.MKCKKSError)
 
 
 def test_context_policy_and_worker_validation() -> None:
@@ -82,7 +108,7 @@ def test_scalar_integer_shape_and_identifier_validation(context: mkckks.Context)
         evaluator.drop_level(ciphertext, 1.5)  # type: ignore[arg-type]
     with pytest.raises(mkckks.InvalidParameterError):
         evaluator.drop_level(ciphertext, 1 << 31)
-    with pytest.raises(ValueError, match="finite"):
+    with pytest.raises(mkckks.InvalidParameterError, match="finite"):
         evaluator.rescale(ciphertext, 0)
     with pytest.raises(mkckks.InvalidParameterError, match="Boolean"):
         party.generate_evaluation_keys(relinearization=1)  # type: ignore[arg-type]
@@ -98,11 +124,37 @@ def test_shape_and_precision_validation() -> None:
         api._validated_shape([True])
     with pytest.raises(mkckks.SerializationError, match="product"):
         api._validated_shape([1 << 20, 1 << 20])
-    with pytest.raises(ValueError, match="identical"):
+    with pytest.raises(mkckks.ShapeMismatchError, match="identical") as invalid:
         mkckks.measure_precision([1.0], [1.0, 2.0])
+    assert isinstance(invalid.value, mkckks.MKCKKSError)
     report = mkckks.measure_precision([1.0], [1.0])
     assert report.minimum_precision_bits == float("inf")
     assert report.maximum_component_error == 0
+
+
+@pytest.mark.parametrize("name", [None, 1, True, object()])
+def test_preset_type_validation_uses_public_error_taxonomy(name: object) -> None:
+    with pytest.raises(mkckks.InvalidParameterError, match="string") as invalid:
+        mkckks.Parameters.preset(name)  # type: ignore[arg-type]
+    assert isinstance(invalid.value, mkckks.MKCKKSError)
+
+
+def test_precision_bound_validation_uses_public_error_taxonomy() -> None:
+    parameters = mkckks.Parameters.preset("PN14QP439")
+    for source, operation in (
+        (object(), mkckks.PrecisionClass.BASIC),
+        (parameters, "unsupported"),
+        (parameters, True),
+    ):
+        with pytest.raises(mkckks.InvalidParameterError) as invalid:
+            mkckks.precision_bound(source, operation)  # type: ignore[arg-type]
+        assert isinstance(invalid.value, mkckks.MKCKKSError)
+
+
+def test_empty_evaluation_key_set_uses_public_error_taxonomy(context: mkckks.Context) -> None:
+    with pytest.raises(mkckks.InvalidParameterError, match="at least one") as invalid:
+        mkckks.EvaluationKeySet.combine(context, [])
+    assert isinstance(invalid.value, mkckks.MKCKKSError)
 
 
 def test_release_safely_shutdown_paths(monkeypatch: pytest.MonkeyPatch) -> None:

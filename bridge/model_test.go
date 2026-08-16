@@ -96,6 +96,120 @@ func TestContextArtifactRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPartyIdentitySurvivesContextReplicationAndRejectsNameCollision(t *testing.T) {
+	ctx := testContext(t)
+	contextArtifact, err := serializeEntry(registryEntry{kind: kindContext, value: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicaEntry, err := deserializeEntry(nil, contextArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica := replicaEntry.value.(*nativeContext)
+
+	alice, err := generateParty(ctx, "replicated-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicArtifact, err := serializeEntry(registryEntry{
+		kind:  kindPublicKey,
+		value: &nativePublicKey{ctx: ctx, pk: clonePublicKey(alice.pk), identity: alice.identity},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicEntry, err := deserializeEntry(replica, publicArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredPublic := publicEntry.value.(*nativePublicKey)
+
+	left, err := encryptValues(ctx, alice.pk, [][]complex128{{1}}, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := encryptValues(replica, restoredPublic.pk, [][]complex128{{2}}, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum, err := binaryCipher("add", left, right)
+	if err != nil {
+		t.Fatalf("same public key was rejected across context replicas: %v", err)
+	}
+	share, err := partialDecrypt(alice, sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values, err := collectiveDecrypt(sum, []*nativeShare{share})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmplx.Abs(values[0]-3) > 1e-8 {
+		t.Fatalf("replicated-context decrypt: got %v want 3", values[0])
+	}
+
+	otherReplicaEntry, err := deserializeEntry(nil, contextArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impostor, err := generateParty(otherReplicaEntry.value.(*nativeContext), "replicated-alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	impostorCipher, err := encryptValues(
+		impostor.ctx, impostor.pk, [][]complex128{{2}}, 1, false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = binaryCipher("add", left, impostorCipher); err == nil {
+		t.Fatal("different public keys under the same party ID were accepted")
+	} else {
+		var statusErr *nativeStatusError
+		if !errors.As(err, &statusErr) || statusErr.code != statusKey {
+			t.Fatalf("identity collision returned %T %v, want statusKey", err, err)
+		}
+	}
+	if _, err = partialDecrypt(impostor, left); err == nil {
+		t.Fatal("wrong same-name party produced a decryption share")
+	} else {
+		var statusErr *nativeStatusError
+		if !errors.As(err, &statusErr) || statusErr.code != statusShare {
+			t.Fatalf("wrong-key partial decrypt returned %T %v, want statusShare", err, err)
+		}
+	}
+
+	aliceContribution, err := generateEvalContribution(alice, true, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	impostorContribution, err := generateEvalContribution(impostor, true, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = combineEvalContributions([]*nativeEvalContribution{
+		aliceContribution, impostorContribution,
+	}); err == nil {
+		t.Fatal("different same-name evaluation-key contributions were combined")
+	}
+	impostorKeys, err := combineEvalContributions([]*nativeEvalContribution{impostorContribution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = requireEvaluationCoverage(left, impostorKeys); err == nil {
+		t.Fatal("same-name evaluation keys for a different public key were accepted")
+	}
+
+	impostorArtifact, err := serializeEntry(registryEntry{kind: kindCiphertext, value: impostorCipher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = deserializeEntry(ctx, impostorArtifact); err == nil {
+		t.Fatal("same-name ciphertext for a different public key was imported")
+	}
+}
+
 func TestRegistryRejectsStaleHandles(t *testing.T) {
 	handle := putObject(kindContext, testContext(t))
 	if err := releaseObject(handle); err != nil {
@@ -911,6 +1025,7 @@ func TestPayloadDecoderAllocationAndStructureBounds(t *testing.T) {
 
 	w = new(binaryWriter)
 	w.string("alice")
+	writePartyKeyFingerprint(w, partyKeyFingerprint{1})
 	w.raw(make([]byte, 16))
 	w.u64(1)
 	w.u32(0)
@@ -918,32 +1033,58 @@ func TestPayloadDecoderAllocationAndStructureBounds(t *testing.T) {
 		t.Fatal("zero decryption-share chunk count accepted")
 	}
 
+	writeCipherPrefix := func(w *binaryWriter) {
+		w.u64(1)
+		w.u8(0)
+		w.raw(make([]byte, 16))
+		writeCorrectnessTracking(w, correctnessTracking{})
+		w.u32(1)
+		w.string("alice")
+		writePartyKeyFingerprint(w, partyKeyFingerprint{1})
+	}
 	w = new(binaryWriter)
-	w.u64(1)
-	w.u8(0)
-	w.raw(make([]byte, 16))
+	writeCipherPrefix(w)
 	w.u32(0)
 	if _, err = readCipherPayload(ctx, w.Bytes()); err == nil {
 		t.Fatal("zero ciphertext chunk count accepted")
 	}
 	w = new(binaryWriter)
-	w.u64(1)
-	w.u8(0)
-	w.raw(make([]byte, 16))
+	writeCipherPrefix(w)
 	w.u32(1)
 	w.f64(math.Inf(1))
 	if _, err = readCipherPayload(ctx, w.Bytes()); err == nil {
 		t.Fatal("non-finite ciphertext scale accepted")
 	}
 	w = new(binaryWriter)
-	w.u64(1)
-	w.u8(0)
-	w.raw(make([]byte, 16))
+	writeCipherPrefix(w)
 	w.u32(1)
 	w.f64(ctx.params.Scale())
 	w.u32(0)
 	if _, err = readCipherPayload(ctx, w.Bytes()); err == nil {
 		t.Fatal("zero ciphertext component count accepted")
+	}
+	writeCipherIdentityHeader := func(w *binaryWriter, count uint32) {
+		w.u64(1)
+		w.u8(0)
+		w.raw(make([]byte, 16))
+		writeCorrectnessTracking(w, correctnessTracking{})
+		w.u32(count)
+	}
+	w = new(binaryWriter)
+	writeCipherIdentityHeader(w, 1)
+	w.string("")
+	writePartyKeyFingerprint(w, partyKeyFingerprint{1})
+	if _, err = readCipherPayload(ctx, w.Bytes()); err == nil {
+		t.Fatal("invalid ciphertext participant identity accepted")
+	}
+	w = new(binaryWriter)
+	writeCipherIdentityHeader(w, 2)
+	for i := 0; i < 2; i++ {
+		w.string("alice")
+		writePartyKeyFingerprint(w, partyKeyFingerprint{1})
+	}
+	if _, err = readCipherPayload(ctx, w.Bytes()); err == nil {
+		t.Fatal("duplicate ciphertext participant identity accepted")
 	}
 	party, err := generateParty(ctx, "payload-bounds-party")
 	if err != nil {
@@ -1164,6 +1305,20 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 	}
 
 	t.Run("polynomial and key validation", func(t *testing.T) {
+		if _, fingerprintErr := publicKeyFingerprint(nil); fingerprintErr == nil {
+			t.Fatal("nil public key fingerprinted successfully")
+		}
+		badFingerprintKey := clonePublicKey(party.pk)
+		badFingerprintKey.Value[0].Q = nil
+		if _, fingerprintErr := publicKeyFingerprint(badFingerprintKey); fingerprintErr == nil {
+			t.Fatal("public key with a nil polynomial fingerprinted successfully")
+		}
+		failedReader := newBinaryReader(nil)
+		failedReader.err = errors.New("earlier parse failure")
+		if identity := readPartyKeyFingerprint(failedReader); identity != (partyKeyFingerprint{}) {
+			t.Fatal("failed fingerprint reader returned a nonzero identity")
+		}
+
 		w := new(binaryWriter)
 		writeSwitchingKey(w, nil)
 		r := newBinaryReader(w.Bytes())
@@ -1246,6 +1401,20 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 
 	t.Run("ciphertext consistency", func(t *testing.T) {
 		invalid := cloneCiphertext()
+		invalid.identities = nil
+		requireRejected("ciphertext without participant identities", decodeCiphertext(invalid))
+
+		invalid = cloneCiphertext()
+		invalid.identities = map[string]partyKeyFingerprint{party.sk.ID: {}}
+		requireRejected("ciphertext with a zero participant identity", decodeCiphertext(invalid))
+
+		invalid = cloneCiphertext()
+		invalid.identities = map[string]partyKeyFingerprint{
+			"decoder-matrix-other": party.identity,
+		}
+		requireRejected("ciphertext with mismatched participant identities", decodeCiphertext(invalid))
+
+		invalid = cloneCiphertext()
 		invalid.chunks[1].Scale *= 2
 		requireRejected("inconsistent ciphertext scales", decodeCiphertext(invalid))
 
@@ -1277,21 +1446,71 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		for i, delta := range share.deltas {
 			invalid.deltas[i] = delta.CopyNew()
 		}
-		invalid.deltas[1].Coeffs = invalid.deltas[1].Coeffs[:len(invalid.deltas[1].Coeffs)-1]
+		invalid.deltas[0].Coeffs[0] = invalid.deltas[0].Coeffs[0][:1]
 		payload, writeErr := writeSharePayload(&invalid)
 		if writeErr != nil {
 			t.Fatal(writeErr)
 		}
 		_, readErr := readSharePayload(ctx, payload)
+		requireRejected("share with invalid polynomial degree", readErr)
+
+		invalid = *share
+		invalid.deltas = make([]*ring.Poly, len(share.deltas))
+		for i, delta := range share.deltas {
+			invalid.deltas[i] = delta.CopyNew()
+		}
+		invalid.deltas[1].Coeffs = invalid.deltas[1].Coeffs[:len(invalid.deltas[1].Coeffs)-1]
+		payload, writeErr = writeSharePayload(&invalid)
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		_, readErr = readSharePayload(ctx, payload)
 		requireRejected("share chunks with inconsistent levels", readErr)
 	})
 
+	t.Run("identity registry failure atomicity", func(t *testing.T) {
+		known, conflicting := partyKeyFingerprint{1}, partyKeyFingerprint{2}
+		if err := registerPartyIdentity(ctx, "registry-conflict", known); err != nil {
+			t.Fatal(err)
+		}
+		if err := reservePartyID(ctx, "registry-conflict", conflicting); err == nil {
+			t.Fatal("party identity conflicting with a known public key was reserved")
+		}
+		if _, reserved := ctx.partyIDs["registry-conflict"]; reserved {
+			t.Fatal("failed party identity reservation mutated the owner registry")
+		}
+	})
+
 	t.Run("party plaintext and primitive payloads", func(t *testing.T) {
-		partyPayload, writeErr := writePartyPayload(party)
+		badParty := &nativeParty{
+			ctx: ctx, sk: cloneSecretKey(party.sk), pk: clonePublicKey(party.pk),
+			identity: party.identity,
+		}
+		badParty.sk.Value.Q.Coeffs[0] = badParty.sk.Value.Q.Coeffs[0][:1]
+		partyPayload, writeErr := writePartyPayload(badParty)
 		if writeErr != nil {
 			t.Fatal(writeErr)
 		}
 		_, readErr := readPartyPayload(ctx, partyPayload)
+		requireRejected("party with invalid secret-key polynomial degree", readErr)
+
+		badParty = &nativeParty{
+			ctx: ctx, sk: cloneSecretKey(party.sk), pk: clonePublicKey(party.pk),
+			identity: party.identity,
+		}
+		badParty.pk.Value[0].Q.Coeffs[0] = badParty.pk.Value[0].Q.Coeffs[0][:1]
+		partyPayload, writeErr = writePartyPayload(badParty)
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		_, readErr = readPartyPayload(ctx, partyPayload)
+		requireRejected("party with invalid public-key polynomial degree", readErr)
+
+		partyPayload, writeErr = writePartyPayload(party)
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		_, readErr = readPartyPayload(ctx, partyPayload)
 		requireRejected("duplicate imported party", readErr)
 
 		badPublic := &nativePublicKey{ctx: ctx, pk: clonePublicKey(party.pk)}
@@ -1357,6 +1576,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 	t.Run("evaluation key ownership and duplication", func(t *testing.T) {
 		writeParticipant := func(w *binaryWriter, id string, rotations int) {
 			w.string(id)
+			writePartyKeyFingerprint(w, party.identity)
 			writeRelinearizationKey(w, nil)
 			w.u32(uint32(rotations))
 			for i := 0; i < rotations; i++ {
@@ -1381,6 +1601,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		originalID := contribution.rlin.ID
 		contribution.rlin.ID = "another-owner"
 		writeRelinearizationKey(w, contribution.rlin)
@@ -1393,6 +1614,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(1)
 		rotation := contribution.rotations[1]
@@ -1407,6 +1629,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(0)
 		conjugation := contribution.conj
@@ -1420,6 +1643,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32((1 << 16) + 1)
 		_, readErr = readEvalSetPayload(ctx, w.Bytes())
@@ -1427,6 +1651,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 
 		w = new(binaryWriter)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(1)
 		w.i64(0)
@@ -1435,6 +1660,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 
 		w = new(binaryWriter)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(2)
 		for i := 0; i < 2; i++ {
@@ -1454,6 +1680,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		originalID = contribution.rlin.ID
 		contribution.rlin.ID = ""
 		writeRelinearizationKey(w, contribution.rlin)
@@ -1466,6 +1693,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(1)
 		rotation = contribution.rotations[1]
@@ -1480,6 +1708,7 @@ func TestArtifactDecoderValidationMatrix(t *testing.T) {
 		w = new(binaryWriter)
 		w.u32(1)
 		w.string(party.sk.ID)
+		writePartyKeyFingerprint(w, party.identity)
 		writeRelinearizationKey(w, nil)
 		w.u32(0)
 		conjugation = contribution.conj

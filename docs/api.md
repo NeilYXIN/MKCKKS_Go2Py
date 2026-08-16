@@ -12,7 +12,9 @@ All native-backed objects belong to one `Context`, which fixes the parameters
 and common reference string. Objects from different contexts are intentionally
 incompatible. A `Party` represents one named key owner, and a ciphertext's
 participant set records which parties must contribute to collective
-decryption.
+decryption. The bridge additionally binds each name to a canonical public-key
+fingerprint, preventing unrelated same-name keys from being merged across
+serialized context replicas.
 
 ## Exported surface
 

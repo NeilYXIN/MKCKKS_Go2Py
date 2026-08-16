@@ -9,8 +9,9 @@ The 0.x API and artifact formats may change before 1.0.
 
 ## [Unreleased]
 
-These changes are intended for 0.2.0. The version heading, release date, and
-compare links are added only when the release tag is created.
+No changes yet.
+
+## [0.2.0] - 2026-08-16
 
 ### Added
 
@@ -25,8 +26,9 @@ compare links are added only when the release tag is created.
 - 400 deterministic release circuits, full ordered-operation-pair coverage,
   multi-chunk differential chains, repeated-squaring range probes, oracle
   comparator self-tests, and per-operation C decryption checks.
-- Frozen Python/native serialization envelope 1.0 and the first-release
-  compatibility bundle generator.
+- Frozen Python envelope 1.0 and native envelope 2.0, plus the first-release
+  compatibility bundle generator. Native 2.0 binds participant names to public
+  keys; the earlier native 1.0 draft was never released.
 - An executable reproduction of the original notebook's three-client
   encryption, addition, scalar multiplication, and collective-decryption flow,
   with explicit expected values and scale-aware precision checks.
@@ -47,6 +49,11 @@ compare links are added only when the release tag is created.
 
 ### Changed
 
+- Standardized development, packaging, CI, examples, and release certification
+  on standard GIL-enabled CPython 3.13 and NumPy 2.1 or newer. v0.2 now claims
+  one fully verified interpreter instead of weaker smoke-only support tiers for
+  additional versions; unsupported implementations and free-threaded builds
+  fail at import.
 - Release-candidate versioning now derives directly from `pyproject.toml`.
 - Every release-candidate artifact and report is pinned to one resolved commit,
   with checksums generated against the filenames published by GitHub Releases.
@@ -73,11 +80,17 @@ compare links are added only when the release tag is created.
   `CONTRIBUTING.md` documents the command for each tier.
 - The release-candidate workflow serializes all candidate runs, refuses to
   start when the target version tag points to another commit, and can complete a
-  partially uploaded draft on re-dispatch.
+  partially uploaded draft on re-dispatch without modifying an already-published
+  release.
 - The Go bridge reuses ciphertext-only evaluators, partial-decryptors, and
   explicitly scrubbed encoders via per-context `sync.Pool`s, so cheap
   ciphertext operations no longer reconstruct a `KeySwitcher` on every chunk
   without retaining plaintext-derived buffers in long-lived pools.
+- Controlled Apple M3 measurements put Python median latency within 9% of the C
+  ABI for addition and within 1% for multiplication and rotation. Four workers
+  delivered 3.16x the one-worker throughput for eight-chunk complex encryption;
+  release candidates attach environment-stamped reports rather than presenting
+  these local figures as universal performance guarantees.
 
 ### Removed
 
@@ -99,6 +112,11 @@ compare links are added only when the release tag is created.
 - Unsupported lower-level conjugation is a documented `LevelError` rather than
   an upstream panic.
 - `__version__` is exported through `__all__`.
+- Party IDs are bound to canonical public-key fingerprints across ciphertexts,
+  evaluation keys, decryption shares, and native artifacts. Context replicas
+  now reject unrelated same-name keypairs before arithmetic or decryption.
+- `ResourceLimits.max_chunks` now enforces its documented hard ceiling of 64,
+  and preset/precision validation consistently raises `InvalidParameterError`.
 
 ### Security
 
@@ -108,6 +126,8 @@ compare links are added only when the release tag is created.
 - Fractional and Boolean rotations, invalid ABI flags, non-finite native
   inputs, unsafe rescale thresholds, incompatible scales, and exhausted-level
   multiplication are rejected before entering upstream code.
+- Decryption shares are documented as sensitive, unauthenticated protocol
+  material without an unsupported standalone-confidentiality claim.
 
 ## [0.1.0] - 2026-08-06
 
@@ -123,3 +143,6 @@ compare links are added only when the release tag is created.
 
 - Replaced coefficient-copying ctypes structures with an opaque versioned ABI.
 - Restored and integrity-locked the pinned upstream Go implementation.
+
+[Unreleased]: https://github.com/NeilYXIN/MKCKKS_Go2Py/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/NeilYXIN/MKCKKS_Go2Py/releases/tag/v0.2.0

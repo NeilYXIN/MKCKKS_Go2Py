@@ -45,13 +45,23 @@ def precision_bound(source: Parameters | Ciphertext, operation: PrecisionClass) 
     :class:`Ciphertext` argument uses the ciphertext's actual current scale,
     which is the appropriate form after multiplication or explicit rescaling.
     """
-    selected = PrecisionClass(operation)
-    if hasattr(source, "context"):
+    try:
+        selected = PrecisionClass(operation)
+    except (TypeError, ValueError) as exc:
+        raise InvalidParameterError("operation must be a supported PrecisionClass") from exc
+
+    # Import locally to avoid a module cycle while still validating the public
+    # contract explicitly instead of accepting arbitrary lookalike objects.
+    from .api import Ciphertext, Parameters
+
+    if isinstance(source, Ciphertext):
         scale = float(source.scale)
         log_slots = int(source.context.parameters.log_slots)
-    else:
+    elif isinstance(source, Parameters):
         scale = float(source.scale)
         log_slots = int(source.log_slots)
+    else:
+        raise InvalidParameterError("source must be Parameters or Ciphertext")
     if not math.isfinite(scale) or scale <= 0:
         raise InvalidParameterError("scale must be finite and positive")
     return math.exp2(-math.log2(scale) + log_slots + _SLACK_BITS[selected])

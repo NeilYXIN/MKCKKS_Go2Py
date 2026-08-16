@@ -1,7 +1,7 @@
 # MKCKKS Go2Py
 
 [![CI](https://github.com/NeilYXIN/MKCKKS_Go2Py/actions/workflows/ci.yml/badge.svg)](https://github.com/NeilYXIN/MKCKKS_Go2Py/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.13-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT%20AND%20CC--BY--NC--2.0-lightgrey)](LICENSE)
 
 A NumPy-first Python binding for the multi-key CKKS research implementation
@@ -30,21 +30,6 @@ ciphertexts from different contexts cannot be mixed. The intended audience is
 researchers and developers evaluating multi-key CKKS locally, not production
 systems handling sensitive data.
 
-## AI-assisted refactor
-
-The original Go-to-Python wrapper and project direction were created by the
-repository author. The v0.2 architecture, bridge refactor, Python API, tests,
-documentation, and release tooling were implemented extensively with OpenAI
-Codex under the maintainer's direction. The protected upstream MKHE-KKLSS Go
-implementation was not rewritten by AI: it remains pinned, hash-verified, and
-byte-for-byte unchanged from upstream commit `13fed55`.
-
-AI assistance is disclosed as development provenance, not as evidence of
-correctness. Confidence comes from reproducible tests, independent comparison
-with the protected upstream public API, reviewable source, and release gates.
-Maintainers and contributors remain responsible for reviewing changes and
-release decisions.
-
 ## Highlights
 
 - `float32`/`float64` and `complex64`/`complex128` NumPy input, normalized to
@@ -54,21 +39,29 @@ release decisions.
 - Addition, subtraction, real/complex constants, plaintext products,
   ciphertext multiplication/relinearization, rescaling, level management,
   rotation, conjugation, and collective decryption.
-- Opaque native handles: ciphertext coefficients are no longer copied through
-  Python after every operation.
-- Bounded parallel execution across independent ciphertext chunks.
+- Opaque native handles and pooled ciphertext-only helpers keep evaluation hot
+  paths close to native latency without retaining plaintext-derived buffers.
+- Bounded parallel execution accelerates independent ciphertext chunks.
 - Versioned, checksummed serialization for contexts/CRS, keys, ciphertexts,
   plaintexts, and decryption shares.
 - Conservative circuit-range and approximation-error tracking, with sticky
   warning metadata when an intermediate leaves the tested numerical contract.
 - The upstream Go algorithm is byte-for-byte protected by `UPSTREAM.lock`.
 
+In a controlled local reference run on an Apple M3 with CPython 3.13.14,
+Python median latency was within 9% of the C ABI for addition and within 1% for
+multiplication and rotation. Four workers delivered 3.16x the one-worker
+throughput for eight-chunk complex encryption. These figures are illustrative,
+not cross-machine guarantees; every release candidate attaches
+environment-stamped timing, allocation, and throughput reports. See the
+[performance methodology](docs/performance.md).
+
 ## Installation
 
 v0.2 is distributed through
 [GitHub Releases](https://github.com/NeilYXIN/MKCKKS_Go2Py/releases) rather than
-PyPI. Download the wheel matching your platform and install it into a Python
-3.11–3.14 environment:
+PyPI. Download the wheel matching your platform and install it into a standard
+GIL-enabled CPython 3.13 environment:
 
 ```console
 python -m pip install /path/to/downloaded-wheel.whl
@@ -79,10 +72,11 @@ manylinux_2_28 x86_64. A wheel installation does not require Go or a C
 compiler. Native Windows is not supported; see the
 [known limitations](docs/known-limitations.md) for WSL2 guidance.
 
-Support scope across the four Python versions is not uniform: the full
-correctness, race, coverage, and C ABI matrix runs on 3.12, while 3.11, 3.13, and
-3.14 are verified by installing the wheel and running an encrypted end-to-end
-smoke test. Report anything version-specific as a bug.
+GIL-enabled CPython 3.13 is the sole supported interpreter for v0.2. Source
+tests, coverage, installed-wheel smoke tests, examples, and release
+certification all use that same runtime. Unsupported implementations, versions,
+and free-threaded builds fail at import rather than running outside the tested
+contract. Another runtime will be added only when it can carry the same gates.
 
 To build from a source checkout, install `uv`, Go 1.26.5 with cgo, and a C
 compiler. On macOS, Homebrew can provide the tools:
@@ -191,7 +185,7 @@ The v0.2 release-candidate correctness program is configured to include:
   lifecycle tests, and a standalone consumer covering all 31 C ABI symbols;
 - minimum coverage gates of 95% for the Python wrapper and 93% for new Go
   bridge code, excluding protected upstream code. The latest local bridge-core
-  run measured 95.08% statement coverage.
+  run measured 95.10% statement coverage.
 
 See [the correctness methodology](docs/correctness.md) for the oracle design,
 precision bounds, limitations, and release blockers. These tests provide strong
@@ -203,10 +197,8 @@ environment. They should be regenerated for the release commit rather than
 treated as a permanent guarantee about later changes.
 
 ```console
-.venv/bin/python scripts/verify_upstream.py
-GOCACHE=/tmp/mkckks-go-cache go test ./mkckks ./mkrlwe ./mkbfv ./bridge
-bash scripts/check_go_coverage.sh
-.venv/bin/pytest -m "not release"
+bash scripts/check.sh
+.venv/bin/pytest -m release
 ```
 
 A bare `pytest` runs only the fast tier; see
@@ -297,10 +289,27 @@ new v0.2 release-candidate suite.
 
 ## Project
 
+- [v0.2.0 release notes](docs/release-notes-0.2.0.md) — release highlights,
+  performance, runtime scope, and evidence
 - [Changelog](CHANGELOG.md) — what changed in each release
 - [Contributing](CONTRIBUTING.md) — how to build, test, and submit changes
 - [Security policy](SECURITY.md) — how to report a vulnerability
 - [Code of conduct](CODE_OF_CONDUCT.md)
 - [Citation](CITATION.cff) — how to cite this work
+
+### Development provenance
+
+The original Go-to-Python wrapper and project direction were created by the
+repository author. The v0.2 architecture, bridge refactor, Python API, tests,
+documentation, and release tooling were implemented extensively with OpenAI
+Codex under the maintainer's direction. The protected upstream MKHE-KKLSS Go
+implementation was not rewritten by AI: it remains pinned, hash-verified, and
+byte-for-byte unchanged from upstream commit `13fed55`.
+
+AI assistance is disclosed as development provenance, not as evidence of
+correctness. Confidence comes from reproducible tests, independent comparison
+with the protected upstream public API, reviewable source, and release gates.
+Maintainers and contributors remain responsible for reviewing changes and
+release decisions.
 
 See [NOTICE](NOTICE) and [LICENSE](LICENSE) before redistribution.

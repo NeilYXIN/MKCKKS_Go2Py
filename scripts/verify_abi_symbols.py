@@ -12,6 +12,10 @@ from mkckks import _native
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = set((ROOT / "abi" / "symbols-v1.txt").read_text().splitlines())
 MANIFEST = ROOT / "abi" / "test-manifest-v1.json"
+REQUIRED_FAILURE_EVIDENCE = {
+    "mkckks_v1_multiply": "shape mismatch returns status 1",
+    "mkckks_v1_partial_decrypt": "non-participant returns status 7",
+}
 
 
 def main() -> None:
@@ -47,6 +51,9 @@ def main() -> None:
     for symbol, evidence in manifest["symbols"].items():
         if not evidence.get("success") or "failure" not in evidence:
             raise SystemExit(f"ABI test manifest has incomplete evidence for {symbol}")
+    for symbol, required in REQUIRED_FAILURE_EVIDENCE.items():
+        if required not in manifest["symbols"][symbol]["failure"]:
+            raise SystemExit(f"ABI test manifest is missing {required!r} for {symbol}")
     print(f"ABI v1 symbol and test-evidence snapshots verified ({len(actual)} symbols)")
 
 

@@ -162,9 +162,9 @@ def test_add_subtract_scalar_plaintext_and_ciphertext(context: mkckks.Context) -
     ]
     for result, expected, bound in cases:
         assert_precision(decrypt_one(context, party, result), expected, bound)
-    with pytest.raises(ValueError, match="finite"):
+    with pytest.raises(mkckks.InvalidParameterError, match="finite"):
         evaluator.add(ciphertext, float("nan"))
-    with pytest.raises(ValueError, match="finite"):
+    with pytest.raises(mkckks.InvalidParameterError, match="finite"):
         evaluator.multiply_scalar(ciphertext, float("inf"))
 
 
@@ -487,7 +487,7 @@ def test_slot_boundary_chunking(context: mkckks.Context) -> None:
     assert ciphertext.chunk_count == 2
     assert ciphertext.slots == context.slots
     assert ciphertext.context_fingerprint == context.fingerprint
-    with pytest.raises(ValueError, match="one chunk"):
+    with pytest.raises(mkckks.InvalidParameterError, match="one chunk"):
         mkckks.Evaluator(context).rotate_slots(ciphertext, 1)
     assert_precision(decrypt_one(context, party, ciphertext), values, local(ciphertext))
 

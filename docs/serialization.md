@@ -1,6 +1,6 @@
 # Serialization compatibility
 
-The current formats are Python envelope 1.0 and native envelope 1.0. Artifacts
+The current formats are Python envelope 1.0 and native envelope 2.0. Artifacts
 have two checksummed layers. The Python envelope stores explicit 16-bit major
 and minor fields (currently 1 and 0), rather than encoding version only in its
 magic bytes, and preserves
@@ -11,9 +11,13 @@ The native envelope includes artifact kind, pinned upstream commit,
 context/CRS fingerprint, bounded lengths, and a SHA-256 corruption checksum.
 Maps are serialized in sorted order. Imports reject mismatched contexts,
 unsupported versions, corrupted data, excessive lengths, and trailing bytes.
-Participant IDs are canonicalized and every Python-visible kind, context,
-party ID, ciphertext ID, participant set, length, complexity flag, level, and
-scale is cross-checked against native metadata before an object is returned.
+Participant IDs are canonicalized and bound to SHA-256 fingerprints of their
+canonical public keys. Ciphertexts, evaluation-key material, and decryption
+shares carry that binding, so independently generated keys cannot be merged or
+used for partial decryption merely because they reuse the same party name.
+Every Python-visible kind, context, party ID, ciphertext ID, participant set,
+length, complexity flag, level, and scale is cross-checked against native
+metadata before an object is returned.
 Plaintext/ciphertext envelopes also store tracked magnitude, propagated error,
 range margin, and sticky outside-range state. Import cross-checks those fields
 against the native payload, so recomputing only the outer checksum cannot
@@ -37,7 +41,10 @@ checksum, is not an authenticator. Artifacts and logical arrays are rejected
 above conservative 1 GiB and 2^26-value limits before allocation.
 
 Minor-format additions must remain backward compatible. Unsupported minor and
-future major versions are rejected and are never silently upgraded. v0.2 is the
-first compatibility baseline, so its manual release workflow generates and
-attaches a bundle containing every artifact kind. Future releases must import
-that released bundle before a release candidate is published.
+future major versions are rejected and are never silently upgraded. Native
+format 2.0 adds the public-key identity binding and deliberately rejects the
+unreleased 1.0 draft format instead of importing artifacts that lack that
+correctness invariant. v0.2 is the first compatibility baseline, so its manual
+release workflow generates and attaches a bundle containing every artifact
+kind. Future releases must import that released bundle before a release
+candidate is published.

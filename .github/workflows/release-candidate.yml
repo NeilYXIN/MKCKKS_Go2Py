@@ -36,7 +36,7 @@ jobs:
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - name: Read release version
         id: release-version
         run: |
@@ -172,7 +172,7 @@ jobs:
           ref: ${{ needs.release-verification.outputs.commit }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: 1.26.5
@@ -206,7 +206,7 @@ jobs:
           ref: ${{ needs.release-verification.outputs.commit }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: 0.12.2
@@ -217,7 +217,7 @@ jobs:
           uv run cibuildwheel --output-dir wheel-b
           cmp wheel-a/*.whl wheel-b/*.whl
         env:
-          CIBW_BUILD: cp312-manylinux_x86_64
+          CIBW_BUILD: cp313-manylinux_x86_64
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
           CIBW_BEFORE_ALL_LINUX: >-
             curl -fsSLO https://go.dev/dl/go1.26.5.linux-amd64.tar.gz &&
@@ -253,7 +253,7 @@ jobs:
           ref: ${{ needs.release-verification.outputs.commit }}
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version: 1.26.5
@@ -284,14 +284,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release-verification.outputs.commit }}
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           path: release-files
-          merge-multiple: true
       - name: Generate checksums
         run: |
           duplicate_names="$(find release-files -type f -printf '%f\n' | sort | uniq -d)"
-          test -z "$duplicate_names"
+          if [ -n "$duplicate_names" ]; then
+            echo "::error::Release artifacts contain duplicate asset names:"
+            printf '%s\n' "$duplicate_names" >&2
+            exit 1
+          fi
           cd release-files
           find . -type f ! -name SHA256SUMS -print0 \
             | sort -z \
@@ -303,15 +309,43 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: v${{ needs.release-verification.outputs.version }}
           TARGET: ${{ needs.release-verification.outputs.commit }}
-        # Creating and uploading are separately idempotent so a re-dispatch after
-        # a partial upload finishes the release instead of erroring out.
+        # A re-dispatch may finish a partial draft upload, but evidence attached
+        # to an already-published release is immutable.
         run: |
-          if ! gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+          if release_json="$(gh release view "$TAG" --repo "$REPO" \
+            --json isDraft,isPrerelease 2>/dev/null)"; then
+            if [ "$(jq -r .isDraft <<<"$release_json")" != "true" ]; then
+              echo "::error::Release $TAG is already published; refusing to replace its assets."
+              exit 1
+            fi
+            if [ "$(jq -r .isPrerelease <<<"$release_json")" != "true" ]; then
+              echo "::error::Existing draft $TAG is not the expected prerelease."
+              exit 1
+            fi
+            echo "::notice::Resuming uploads to existing draft prerelease $TAG."
+            gh release edit "$TAG" \
+              --repo "$REPO" \
+              --title "MKCKKS Go2Py $TAG" \
+              --notes-file docs/release-notes-0.2.0.md
+          else
             gh release create "$TAG" \
               --repo "$REPO" \
               --target "$TARGET" \
               --title "MKCKKS Go2Py $TAG" \
-              --notes "Unaudited, noncommercial source-available research prerelease. New wrapper code is MIT; bundled protected upstream MKHE-KKLSS code remains CC BY-NC 2.0. This engineering release is not a cryptographic security audit." \
+              --notes-file docs/release-notes-0.2.0.md \
               --draft --prerelease
           fi
+          # Re-resolve after the hours-long certification and any draft creation,
+          # closing the gap in which an existing tag could have moved since the
+          # verification job's initial check.
+          if ! tagged_commit="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"; then
+            echo "::error::Unable to resolve release tag $TAG before uploading assets."
+            exit 1
+          fi
+          if [ "$tagged_commit" != "$TARGET" ]; then
+            echo "::error::Release tag $TAG resolves to $tagged_commit, not certified commit $TARGET."
+            exit 1
+          fi
+          # --clobber is safe here because the state check above proves the
+          # release is still a draft owned by this version tag.
           find release-files -type f -exec gh release upload "$TAG" --repo "$REPO" --clobber {} +

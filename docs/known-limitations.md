@@ -31,8 +31,10 @@
 - Context/CRS and evaluation-key artifacts can be very large. Byte-based import
   temporarily retains envelope and native payload copies; streaming APIs are
   deferred until profiling justifies them.
-- Native Windows wheels and Python subinterpreters are unsupported. Windows
-  users should use WSL2/Ubuntu source installation.
+- Native Windows wheels, PyPy, free-threaded CPython, and Python subinterpreters
+  are unsupported. v0.2 requires standard GIL-enabled CPython 3.13; unsupported
+  interpreter builds fail at import. Windows users should use WSL2/Ubuntu source
+  installation.
 - Private-state exports and decryption shares are sensitive, unencrypted bytes.
   Callers must provide authenticated transport and secure storage.
 - Go/Python cannot guarantee complete secret zeroization. Core dumps, swap,

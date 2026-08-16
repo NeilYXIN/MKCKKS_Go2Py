@@ -52,6 +52,7 @@ type nativeContext struct {
 	fingerprint string
 	mu          sync.RWMutex
 	partyIDs    map[string]struct{}
+	partyKeys   map[string]partyKeyFingerprint
 
 	// Ciphertext-only upstream engines are expensive to build and cheap to reuse. A single
 	// mkckks.Evaluator allocates a KeySwitcher holding a Decomposer, three
@@ -117,30 +118,33 @@ func (ctx *nativeContext) releaseEncoder(encoder ckks.Encoder) {
 }
 
 type nativeParty struct {
-	ctx *nativeContext
-	sk  *mkrlwe.SecretKey
-	pk  *mkrlwe.PublicKey
+	ctx      *nativeContext
+	sk       *mkrlwe.SecretKey
+	pk       *mkrlwe.PublicKey
+	identity partyKeyFingerprint
 }
 
 type nativePublicKey struct {
-	ctx *nativeContext
-	pk  *mkrlwe.PublicKey
+	ctx      *nativeContext
+	pk       *mkrlwe.PublicKey
+	identity partyKeyFingerprint
 }
 
 type nativeEvalContribution struct {
 	ctx       *nativeContext
 	id        string
+	identity  partyKeyFingerprint
 	rlin      *mkrlwe.RelinearizationKey
 	rotations map[int]*mkrlwe.RotationKey
 	conj      *mkrlwe.ConjugationKey
 }
 
 type nativeEvalSet struct {
-	ctx  *nativeContext
-	rlin *mkrlwe.RelinearizationKeySet
-	rot  *mkrlwe.RotationKeySet
-	conj *mkrlwe.ConjugationKeySet
-	ids  map[string]struct{}
+	ctx        *nativeContext
+	rlin       *mkrlwe.RelinearizationKeySet
+	rot        *mkrlwe.RotationKeySet
+	conj       *mkrlwe.ConjugationKeySet
+	identities map[string]partyKeyFingerprint
 }
 
 type nativePlaintext struct {
@@ -152,17 +156,19 @@ type nativePlaintext struct {
 }
 
 type nativeCiphertext struct {
-	ctx       *nativeContext
-	chunks    []*mkckks.Ciphertext
-	length    int
-	isComplex bool
-	artifact  [16]byte
-	tracking  correctnessTracking
+	ctx        *nativeContext
+	chunks     []*mkckks.Ciphertext
+	length     int
+	isComplex  bool
+	artifact   [16]byte
+	tracking   correctnessTracking
+	identities map[string]partyKeyFingerprint
 }
 
 type nativeShare struct {
 	ctx      *nativeContext
 	partyID  string
+	identity partyKeyFingerprint
 	cipherID [16]byte
 	length   int
 	deltas   []*ring.Poly
@@ -202,7 +208,7 @@ func newContext(raw []byte, workers int) (*nativeContext, error) {
 	}
 	ctx := &nativeContext{
 		literal: dto, params: mkckks.NewParameters(params), workers: workers,
-		partyIDs: make(map[string]struct{}),
+		partyIDs: make(map[string]struct{}), partyKeys: make(map[string]partyKeyFingerprint),
 	}
 	// Encoders and plaintexts are built from plain CKKS parameters that differ
 	// from the multi-key ones only in carrying no CRS. Resolve them once here so
@@ -309,10 +315,59 @@ func randomArtifactID() ([16]byte, error) {
 	return id, err
 }
 
-func newOutputCipher(ctx *nativeContext, chunkCount, length int, isComplex bool) (*nativeCiphertext, error) {
+type partyKeyFingerprint [sha256.Size]byte
+
+func publicKeyFingerprint(pk *mkrlwe.PublicKey) (partyKeyFingerprint, error) {
+	var fingerprint partyKeyFingerprint
+	if pk == nil || len(pk.Value) != 2 {
+		return fingerprint, fmt.Errorf("public key must contain exactly two polynomials")
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("MKCKKS-Go2Py party public key\x00"))
+	_ = binary.Write(hash, binary.BigEndian, uint32(len(pk.ID)))
+	_, _ = hash.Write([]byte(pk.ID))
+	for _, value := range pk.Value {
+		for _, poly := range []*ring.Poly{value.Q, value.P} {
+			if poly == nil {
+				return fingerprint, fmt.Errorf("public key contains a nil polynomial")
+			}
+			data, err := poly.MarshalBinary()
+			if err != nil {
+				return fingerprint, fmt.Errorf("serialize public key: %w", err)
+			}
+			_ = binary.Write(hash, binary.BigEndian, uint64(len(data)))
+			_, _ = hash.Write(data)
+		}
+	}
+	copy(fingerprint[:], hash.Sum(nil))
+	return fingerprint, nil
+}
+
+func clonePartyIdentities(source map[string]partyKeyFingerprint) map[string]partyKeyFingerprint {
+	result := make(map[string]partyKeyFingerprint, len(source))
+	for id, identity := range source {
+		result[id] = identity
+	}
+	return result
+}
+
+func mergePartyIdentities(left, right map[string]partyKeyFingerprint) (map[string]partyKeyFingerprint, error) {
+	result := clonePartyIdentities(left)
+	for id, identity := range right {
+		if existing, ok := result[id]; ok && existing != identity {
+			return nil, statusFailure(statusKey, "", fmt.Sprintf(
+				"participant %q refers to different public keys", id,
+			))
+		}
+		result[id] = identity
+	}
+	return result, nil
+}
+
+func newOutputCipher(ctx *nativeContext, chunkCount, length int, isComplex bool, identities map[string]partyKeyFingerprint) (*nativeCiphertext, error) {
 	out := &nativeCiphertext{
 		ctx: ctx, chunks: make([]*mkckks.Ciphertext, chunkCount),
-		length: length, isComplex: isComplex,
+		length: length, isComplex: isComplex, identities: clonePartyIdentities(identities),
 	}
 	id, err := randomArtifactID()
 	if err != nil {
@@ -338,21 +393,52 @@ func generateParty(ctx *nativeContext, id string) (*nativeParty, error) {
 	if err := validatePartyID(id); err != nil {
 		return nil, err
 	}
-	if err := reservePartyID(ctx, id); err != nil {
-		return nil, err
-	}
 	keygen := mkckks.NewKeyGenerator(ctx.params)
 	sk, pk := keygen.GenKeyPair(id)
-	return &nativeParty{ctx: ctx, sk: sk, pk: pk}, nil
+	identity, err := publicKeyFingerprint(pk)
+	if err != nil {
+		return nil, statusFailure(statusNative, "generate party", err.Error())
+	}
+	if err := reservePartyID(ctx, id, identity); err != nil {
+		zeroParty(&nativeParty{sk: sk})
+		return nil, err
+	}
+	return &nativeParty{ctx: ctx, sk: sk, pk: pk, identity: identity}, nil
 }
 
-func reservePartyID(ctx *nativeContext, id string) error {
+func reservePartyID(ctx *nativeContext, id string, identity partyKeyFingerprint) error {
 	ctx.mu.Lock()
 	defer ctx.mu.Unlock()
 	if _, exists := ctx.partyIDs[id]; exists {
 		return statusFailure(statusInvalid, "", fmt.Sprintf("duplicate party ID %q in this context", id))
 	}
+	if known, exists := ctx.partyKeys[id]; exists && known != identity {
+		return statusFailure(statusKey, "", fmt.Sprintf(
+			"participant %q refers to a different public key already known to this context", id,
+		))
+	}
 	ctx.partyIDs[id] = struct{}{}
+	ctx.partyKeys[id] = identity
+	return nil
+}
+
+func registerPartyIdentity(ctx *nativeContext, id string, identity partyKeyFingerprint) error {
+	return registerPartyIdentities(ctx, map[string]partyKeyFingerprint{id: identity})
+}
+
+func registerPartyIdentities(ctx *nativeContext, identities map[string]partyKeyFingerprint) error {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	for id, identity := range identities {
+		if known, exists := ctx.partyKeys[id]; exists && known != identity {
+			return statusFailure(statusKey, "", fmt.Sprintf(
+				"participant %q refers to a different public key already known to this context", id,
+			))
+		}
+	}
+	for id, identity := range identities {
+		ctx.partyKeys[id] = identity
+	}
 	return nil
 }
 
@@ -578,7 +664,14 @@ func parallelFor(count, workers int, fn func(int) error) error {
 }
 
 func encryptValues(ctx *nativeContext, pk *mkrlwe.PublicKey, values [][]complex128, length int, isComplex bool) (*nativeCiphertext, error) {
-	result, err := newOutputCipher(ctx, len(values), length, isComplex)
+	identity, err := publicKeyFingerprint(pk)
+	if err != nil {
+		return nil, statusFailure(statusNative, "encrypt", err.Error())
+	}
+	result, err := newOutputCipher(
+		ctx, len(values), length, isComplex,
+		map[string]partyKeyFingerprint{pk.ID: identity},
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +717,13 @@ func binaryCipher(op string, left, right *nativeCiphertext) (*nativeCiphertext, 
 			return nil, statusFailure(statusLevel, op, fmt.Sprintf("ciphertext scales are incompatible: %.17g and %.17g", left.chunks[i].Scale, right.chunks[i].Scale))
 		}
 	}
-	out, err := newOutputCipher(left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex)
+	identities, err := mergePartyIdentities(left.identities, right.identities)
+	if err != nil {
+		return nil, err
+	}
+	out, err := newOutputCipher(
+		left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex, identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -699,6 +798,7 @@ func addPlaintextCipher(
 	}
 	out, err := newOutputCipher(
 		input.ctx, len(input.chunks), input.length, input.isComplex || plaintext.isComplex,
+		input.identities,
 	)
 	if err != nil {
 		return nil, err
@@ -773,7 +873,10 @@ func scalarCipher(input *nativeCiphertext, scalar complex128) (*nativeCiphertext
 	if math.IsNaN(real(scalar)) || math.IsInf(real(scalar), 0) || math.IsNaN(imag(scalar)) || math.IsInf(imag(scalar), 0) {
 		return nil, statusFailure(statusInvalid, "multiply scalar", "scalar must be finite")
 	}
-	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex || imag(scalar) != 0)
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex || imag(scalar) != 0,
+		input.identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -850,7 +953,10 @@ func plaintextCipher(input *nativeCiphertext, plaintext *nativePlaintext) (*nati
 			return nil, statusFailure(statusLevel, "multiply plaintext", "ciphertext/plaintext multiplication requires a positive level")
 		}
 	}
-	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex || plaintext.isComplex)
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex || plaintext.isComplex,
+		input.identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -878,7 +984,10 @@ func plaintextCipher(input *nativeCiphertext, plaintext *nativePlaintext) (*nati
 
 func generateEvalContribution(party *nativeParty, relinearization bool, rotations []int, conjugation bool) (*nativeEvalContribution, error) {
 	keygen := mkckks.NewKeyGenerator(party.ctx.params)
-	result := &nativeEvalContribution{ctx: party.ctx, id: party.sk.ID, rotations: make(map[int]*mkrlwe.RotationKey)}
+	result := &nativeEvalContribution{
+		ctx: party.ctx, id: party.sk.ID, identity: party.identity,
+		rotations: make(map[int]*mkrlwe.RotationKey),
+	}
 	if relinearization {
 		r := keygen.GenSecretKey(party.sk.ID)
 		result.rlin = keygen.GenRelinearizationKey(party.sk, r)
@@ -917,21 +1026,27 @@ func combineEvalContributions(contributions []*nativeEvalContribution) (*nativeE
 	}
 	ctx := contributions[0].ctx
 	result := &nativeEvalSet{
-		ctx:  ctx,
-		rlin: mkrlwe.NewRelinearizationKeyKeySet(ctx.params.Parameters),
-		rot:  mkrlwe.NewRotationKeySet(),
-		conj: mkrlwe.NewConjugationKeySet(),
-		ids:  make(map[string]struct{}),
+		ctx:        ctx,
+		rlin:       mkrlwe.NewRelinearizationKeyKeySet(ctx.params.Parameters),
+		rot:        mkrlwe.NewRotationKeySet(),
+		conj:       mkrlwe.NewConjugationKeySet(),
+		identities: make(map[string]partyKeyFingerprint),
 	}
 	for _, contribution := range contributions {
 		if err := requireSameContext(ctx, contribution.ctx); err != nil {
 			return nil, err
 		}
-		if _, exists := result.ids[contribution.id]; exists {
-			return nil, statusFailure(statusKey, "",
-				fmt.Sprintf("duplicate evaluation-key contribution for %q", contribution.id))
+		if identity, exists := result.identities[contribution.id]; exists {
+			if identity != contribution.identity {
+				return nil, statusFailure(statusKey, "", fmt.Sprintf(
+					"participant %q refers to different public keys", contribution.id,
+				))
+			}
+			return nil, statusFailure(statusKey, "", fmt.Sprintf(
+				"duplicate evaluation-key contribution for %q", contribution.id,
+			))
 		}
-		result.ids[contribution.id] = struct{}{}
+		result.identities[contribution.id] = contribution.identity
 		if contribution.rlin != nil {
 			result.rlin.AddRelinearizationKey(contribution.rlin)
 		}
@@ -949,9 +1064,15 @@ func requireEvaluationCoverage(ciphertext *nativeCiphertext, keys *nativeEvalSet
 	if err := requireSameContext(ciphertext.ctx, keys.ctx); err != nil {
 		return err
 	}
-	for id := range ciphertext.chunks[0].IDSet().Value {
-		if _, ok := keys.ids[id]; !ok {
+	for id, identity := range ciphertext.identities {
+		keyIdentity, ok := keys.identities[id]
+		if !ok {
 			return statusFailure(statusKey, "", fmt.Sprintf("evaluation keys missing participant %q", id))
+		}
+		if keyIdentity != identity {
+			return statusFailure(statusKey, "", fmt.Sprintf(
+				"evaluation keys for participant %q belong to a different public key", id,
+			))
 		}
 	}
 	return nil
@@ -1035,7 +1156,13 @@ func multiplyCipher(left, right *nativeCiphertext, keys *nativeEvalSet, hoisted 
 	if err := requireRelinearizationKeys(right, keys); err != nil {
 		return nil, err
 	}
-	out, err := newOutputCipher(left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex)
+	identities, err := mergePartyIdentities(left.identities, right.identities)
+	if err != nil {
+		return nil, err
+	}
+	out, err := newOutputCipher(
+		left.ctx, len(left.chunks), left.length, left.isComplex || right.isComplex, identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1096,7 +1223,9 @@ func rescalePlan(ctx *nativeContext, level int, scale, minimumScale float64) (in
 }
 
 func levelCipher(input *nativeCiphertext, operation string, value float64) (*nativeCiphertext, error) {
-	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex, input.identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1161,7 +1290,9 @@ func rotateCipher(input *nativeCiphertext, keys *nativeEvalSet, rotation int, ho
 		normalized += input.ctx.params.Slots()
 	}
 	if normalized == 0 {
-		out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
+		out, err := newOutputCipher(
+			input.ctx, len(input.chunks), input.length, input.isComplex, input.identities,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -1174,7 +1305,9 @@ func rotateCipher(input *nativeCiphertext, keys *nativeEvalSet, rotation int, ho
 	if err := requireRotationKeys(input, keys, rotation); err != nil {
 		return nil, err
 	}
-	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex, input.identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1220,7 +1353,9 @@ func conjugateCipher(input *nativeCiphertext, keys *nativeEvalSet) (*nativeCiphe
 	if err := requireConjugationKeys(input, keys); err != nil {
 		return nil, err
 	}
-	out, err := newOutputCipher(input.ctx, len(input.chunks), input.length, input.isComplex)
+	out, err := newOutputCipher(
+		input.ctx, len(input.chunks), input.length, input.isComplex, input.identities,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1252,7 +1387,17 @@ func partialDecrypt(party *nativeParty, ciphertext *nativeCiphertext) (*nativeSh
 		return nil, statusFailure(statusShare, "partial decrypt",
 			fmt.Sprintf("ciphertext does not contain participant %q", party.sk.ID))
 	}
-	share := &nativeShare{ctx: party.ctx, partyID: party.sk.ID, cipherID: ciphertext.artifact, length: ciphertext.length, deltas: make([]*ring.Poly, len(ciphertext.chunks))}
+	identity, ok := ciphertext.identities[party.sk.ID]
+	if !ok || identity != party.identity {
+		return nil, statusFailure(statusShare, "partial decrypt", fmt.Sprintf(
+			"participant %q belongs to a different public key", party.sk.ID,
+		))
+	}
+	share := &nativeShare{
+		ctx: party.ctx, partyID: party.sk.ID, identity: party.identity,
+		cipherID: ciphertext.artifact, length: ciphertext.length,
+		deltas: make([]*ring.Poly, len(ciphertext.chunks)),
+	}
 	err := parallelFor(len(ciphertext.chunks), party.ctx.workers, func(i int) error {
 		decryptor := party.ctx.acquireDecryptor()
 		defer party.ctx.releaseDecryptor(decryptor)
@@ -1283,6 +1428,11 @@ func collectiveDecrypt(ciphertext *nativeCiphertext, shares []*nativeShare) ([]c
 		}
 		if !participants.Has(share.partyID) {
 			return nil, statusFailure(statusShare, "", fmt.Sprintf("unexpected share from %q", share.partyID))
+		}
+		if identity, ok := ciphertext.identities[share.partyID]; !ok || identity != share.identity {
+			return nil, statusFailure(statusShare, "", fmt.Sprintf(
+				"share from %q belongs to a different public key", share.partyID,
+			))
 		}
 		if _, ok := seen[share.partyID]; ok {
 			return nil, statusFailure(statusShare, "", fmt.Sprintf("duplicate share from %q", share.partyID))

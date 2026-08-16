@@ -20,10 +20,26 @@ import (
 var artifactMagic = [8]byte{'M', 'K', 'C', 'K', 'K', 'S', 'G', '2'}
 
 const (
-	artifactMajor   = uint16(1)
+	artifactMajor   = uint16(2)
 	artifactMinor   = uint16(0)
 	maxArtifactSize = uint64(1 << 30)
 )
+
+func writePartyKeyFingerprint(w *binaryWriter, identity partyKeyFingerprint) {
+	w.raw(identity[:])
+}
+
+func readPartyKeyFingerprint(r *binaryReader) partyKeyFingerprint {
+	var identity partyKeyFingerprint
+	if r.err != nil {
+		return identity
+	}
+	_, r.err = io.ReadFull(r.Reader, identity[:])
+	if identity == (partyKeyFingerprint{}) && r.err == nil {
+		r.err = fmt.Errorf("party public-key fingerprint cannot be zero")
+	}
+	return identity
+}
 
 type binaryWriter struct {
 	bytes.Buffer
@@ -417,6 +433,13 @@ func readPartyPayload(ctx *nativeContext, payload []byte) (*nativeParty, error) 
 	sk.Value = readPolyQP(r)
 	pk := mkrlwe.NewPublicKey(ctx.params.Parameters, id)
 	pk.Value[0], pk.Value[1] = readPolyQP(r), readPolyQP(r)
+	candidate := &nativeParty{ctx: ctx, sk: sk, pk: pk}
+	accepted := false
+	defer func() {
+		if !accepted {
+			zeroParty(candidate)
+		}
+	}()
 	if err := r.done(); err != nil {
 		return nil, err
 	}
@@ -428,10 +451,16 @@ func readPartyPayload(ctx *nativeContext, payload []byte) (*nativeParty, error) 
 			return nil, fmt.Errorf("invalid public key: %w", err)
 		}
 	}
-	if err := reservePartyID(ctx, id); err != nil {
+	identity, err := publicKeyFingerprint(pk)
+	if err != nil {
+		return nil, fmt.Errorf("fingerprint public key: %w", err)
+	}
+	if err := reservePartyID(ctx, id, identity); err != nil {
 		return nil, err
 	}
-	return &nativeParty{ctx: ctx, sk: sk, pk: pk}, nil
+	candidate.identity = identity
+	accepted = true
+	return candidate, nil
 }
 
 func writePublicKeyPayload(public *nativePublicKey) ([]byte, error) {
@@ -458,7 +487,14 @@ func readPublicKeyPayload(ctx *nativeContext, payload []byte) (*nativePublicKey,
 			return nil, fmt.Errorf("invalid public key: %w", err)
 		}
 	}
-	return &nativePublicKey{ctx: ctx, pk: pk}, nil
+	identity, err := publicKeyFingerprint(pk)
+	if err != nil {
+		return nil, fmt.Errorf("fingerprint public key: %w", err)
+	}
+	if err := registerPartyIdentity(ctx, id, identity); err != nil {
+		return nil, err
+	}
+	return &nativePublicKey{ctx: ctx, pk: pk, identity: identity}, nil
 }
 
 func writeCipherPayload(cipher *nativeCiphertext) ([]byte, error) {
@@ -471,6 +507,16 @@ func writeCipherPayload(cipher *nativeCiphertext) ([]byte, error) {
 	}
 	w.raw(cipher.artifact[:])
 	writeCorrectnessTracking(w, cipher.tracking)
+	identityIDs := make([]string, 0, len(cipher.identities))
+	for id := range cipher.identities {
+		identityIDs = append(identityIDs, id)
+	}
+	sort.Strings(identityIDs)
+	w.u32(uint32(len(identityIDs)))
+	for _, id := range identityIDs {
+		w.string(id)
+		writePartyKeyFingerprint(w, cipher.identities[id])
+	}
 	w.u32(uint32(len(cipher.chunks)))
 	for _, chunk := range cipher.chunks {
 		w.f64(chunk.Scale)
@@ -493,6 +539,24 @@ func readCipherPayload(ctx *nativeContext, payload []byte) (*nativeCiphertext, e
 	result := &nativeCiphertext{ctx: ctx, length: int(r.u64()), isComplex: r.u8() != 0}
 	_, r.err = io.ReadFull(r.Reader, result.artifact[:])
 	result.tracking = readCorrectnessTracking(r)
+	identityCount := r.u32()
+	if identityCount == 0 || identityCount > 1<<16 {
+		return nil, fmt.Errorf("invalid ciphertext participant identity count")
+	}
+	result.identities = make(map[string]partyKeyFingerprint, identityCount)
+	identityIDs := make([]string, 0, identityCount)
+	for i := uint32(0); i < identityCount; i++ {
+		id := r.string(128)
+		if err := validatePartyID(id); err != nil {
+			return nil, err
+		}
+		if _, exists := result.identities[id]; exists {
+			return nil, fmt.Errorf("duplicate ciphertext participant identity %q", id)
+		}
+		result.identities[id] = readPartyKeyFingerprint(r)
+		identityIDs = append(identityIDs, id)
+	}
+	sort.Strings(identityIDs)
 	count := r.u32()
 	if count == 0 || count > 1<<20 {
 		return nil, fmt.Errorf("invalid ciphertext chunk count")
@@ -558,10 +622,22 @@ func readCipherPayload(ctx *nativeContext, payload []byte) (*nativeCiphertext, e
 	if result.length <= 0 || result.length > 1<<26 || (result.length+ctx.params.Slots()-1)/ctx.params.Slots() != len(result.chunks) {
 		return nil, fmt.Errorf("invalid ciphertext logical length")
 	}
+	participantIDs := make([]string, 0, len(expectedIDs)-1)
+	for _, id := range expectedIDs {
+		if id != "0" {
+			participantIDs = append(participantIDs, id)
+		}
+	}
+	if !equalStrings(participantIDs, identityIDs) {
+		return nil, fmt.Errorf("ciphertext participant identities do not match its components")
+	}
 	if !result.tracking.rangeExceeded && trackedRangeMargin(
 		ctx, result.chunks[0].Level(), result.chunks[0].Scale, result.tracking,
 	) < 0 {
 		return nil, fmt.Errorf("ciphertext range metadata is inconsistent")
+	}
+	if err := registerPartyIdentities(ctx, result.identities); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -625,6 +701,7 @@ func readPlaintextPayload(ctx *nativeContext, payload []byte) (*nativePlaintext,
 func writeSharePayload(share *nativeShare) ([]byte, error) {
 	w := new(binaryWriter)
 	w.string(share.partyID)
+	writePartyKeyFingerprint(w, share.identity)
 	w.raw(share.cipherID[:])
 	w.u64(uint64(share.length))
 	w.u32(uint32(len(share.deltas)))
@@ -640,6 +717,7 @@ func readSharePayload(ctx *nativeContext, payload []byte) (*nativeShare, error) 
 	if err := validatePartyID(result.partyID); err != nil {
 		return nil, err
 	}
+	result.identity = readPartyKeyFingerprint(r)
 	_, r.err = io.ReadFull(r.Reader, result.cipherID[:])
 	result.length = int(r.u64())
 	count := r.u32()
@@ -664,6 +742,9 @@ func readSharePayload(ctx *nativeContext, payload []byte) (*nativeShare, error) 
 	}
 	if result.length <= 0 || result.length > 1<<26 || (result.length+ctx.params.Slots()-1)/ctx.params.Slots() != len(result.deltas) {
 		return nil, fmt.Errorf("invalid decryption-share logical length")
+	}
+	if err := registerPartyIdentity(ctx, result.partyID, result.identity); err != nil {
+		return nil, err
 	}
 	return result, nil
 }
@@ -716,6 +797,7 @@ func readConjugationKey(r *binaryReader) *mkrlwe.ConjugationKey {
 func writeEvalContributionPayload(value *nativeEvalContribution) ([]byte, error) {
 	w := new(binaryWriter)
 	w.string(value.id)
+	writePartyKeyFingerprint(w, value.identity)
 	writeRelinearizationKey(w, value.rlin)
 	keys := make([]int, 0, len(value.rotations))
 	for k := range value.rotations {
@@ -732,10 +814,12 @@ func writeEvalContributionPayload(value *nativeEvalContribution) ([]byte, error)
 }
 func readEvalContributionPayload(ctx *nativeContext, payload []byte) (*nativeEvalContribution, error) {
 	r := newBinaryReader(payload)
-	v := &nativeEvalContribution{ctx: ctx, id: r.string(128), rlin: readRelinearizationKey(r), rotations: make(map[int]*mkrlwe.RotationKey)}
+	v := &nativeEvalContribution{ctx: ctx, id: r.string(128), rotations: make(map[int]*mkrlwe.RotationKey)}
 	if err := validatePartyID(v.id); err != nil {
 		return nil, err
 	}
+	v.identity = readPartyKeyFingerprint(r)
+	v.rlin = readRelinearizationKey(r)
 	if err := validateRelinearizationKey(ctx, v.rlin); err != nil {
 		return nil, fmt.Errorf("invalid relinearization key: %w", err)
 	}
@@ -774,19 +858,23 @@ func readEvalContributionPayload(ctx *nativeContext, payload []byte) (*nativeEva
 	if v.conj != nil && v.conj.ID != v.id {
 		return nil, fmt.Errorf("conjugation-key participant mismatch")
 	}
+	if err := registerPartyIdentity(ctx, v.id, v.identity); err != nil {
+		return nil, err
+	}
 	return v, nil
 }
 
 func writeEvalSetPayload(value *nativeEvalSet) ([]byte, error) {
 	w := new(binaryWriter)
-	ids := make([]string, 0, len(value.ids))
-	for id := range value.ids {
+	ids := make([]string, 0, len(value.identities))
+	for id := range value.identities {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 	w.u32(uint32(len(ids)))
 	for _, id := range ids {
 		w.string(id)
+		writePartyKeyFingerprint(w, value.identities[id])
 		writeRelinearizationKey(w, value.rlin.Value[id])
 		rots := value.rot.Value[id]
 		keys := make([]int, 0, len(rots))
@@ -804,7 +892,7 @@ func writeEvalSetPayload(value *nativeEvalSet) ([]byte, error) {
 }
 func readEvalSetPayload(ctx *nativeContext, payload []byte) (*nativeEvalSet, error) {
 	r := newBinaryReader(payload)
-	v := &nativeEvalSet{ctx: ctx, rlin: mkrlwe.NewRelinearizationKeyKeySet(ctx.params.Parameters), rot: mkrlwe.NewRotationKeySet(), conj: mkrlwe.NewConjugationKeySet(), ids: make(map[string]struct{})}
+	v := &nativeEvalSet{ctx: ctx, rlin: mkrlwe.NewRelinearizationKeyKeySet(ctx.params.Parameters), rot: mkrlwe.NewRotationKeySet(), conj: mkrlwe.NewConjugationKeySet(), identities: make(map[string]partyKeyFingerprint)}
 	count := r.u32()
 	if count == 0 || count > 1<<16 {
 		return nil, fmt.Errorf("invalid evaluation participant count")
@@ -814,10 +902,10 @@ func readEvalSetPayload(ctx *nativeContext, payload []byte) (*nativeEvalSet, err
 		if err := validatePartyID(id); err != nil {
 			return nil, err
 		}
-		if _, exists := v.ids[id]; exists {
+		if _, exists := v.identities[id]; exists {
 			return nil, fmt.Errorf("duplicate evaluation-key participant %q", id)
 		}
-		v.ids[id] = struct{}{}
+		v.identities[id] = readPartyKeyFingerprint(r)
 		if key := readRelinearizationKey(r); key != nil {
 			if err := validateRelinearizationKey(ctx, key); err != nil {
 				return nil, fmt.Errorf("invalid relinearization key for %q: %w", id, err)
@@ -857,6 +945,9 @@ func readEvalSetPayload(ctx *nativeContext, payload []byte) (*nativeEvalSet, err
 		}
 	}
 	if err := r.done(); err != nil {
+		return nil, err
+	}
+	if err := registerPartyIdentities(ctx, v.identities); err != nil {
 		return nil, err
 	}
 	return v, nil

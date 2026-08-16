@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import json
 import sys
+import sysconfig
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, cast
@@ -25,6 +26,32 @@ U64P = ctypes.POINTER(ctypes.c_uint64)
 I32P = ctypes.POINTER(ctypes.c_int32)
 DOUBLEP = ctypes.POINTER(ctypes.c_double)
 ERRORP = ctypes.POINTER(ctypes.c_char_p)
+
+
+def _runtime_compatibility_error(
+    implementation: str, version: tuple[int, int], gil_disabled: bool
+) -> str | None:
+    """Return why this interpreter is outside the certified runtime contract."""
+    if implementation != "cpython":
+        return "MKCKKS requires CPython 3.13"
+    if version != (3, 13):
+        return f"MKCKKS requires CPython 3.13, not {version[0]}.{version[1]}"
+    if gil_disabled:
+        return "MKCKKS does not support free-threaded CPython builds"
+    return None
+
+
+def _require_supported_runtime() -> None:
+    error = _runtime_compatibility_error(
+        sys.implementation.name,
+        (sys.version_info.major, sys.version_info.minor),
+        bool(sysconfig.get_config_var("Py_GIL_DISABLED")),
+    )
+    if error is not None:
+        raise ImportError(error)
+
+
+_require_supported_runtime()
 
 
 def _library_path() -> Path:

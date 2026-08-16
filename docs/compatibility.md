@@ -13,7 +13,9 @@ layers. Readers reject future major versions and do not silently upgrade or
 rewrite input. Minor readers may accept an older compatible minor version, but
 writers emit only their current version. Context fingerprints bind every
 dependent artifact to the exact CRS, parameter literal, upstream commit, and
-ABI.
+ABI. The first released baseline uses Python envelope 1.0 and native envelope
+2.0; native 2.0 also binds every party ID to its canonical public-key
+fingerprint.
 
 The `mkckks_v1_multiply` `hoisted` flag remains in the v1 signature so existing
 C callers keep compiling. Values other than 0 or 1 are rejected; both accepted

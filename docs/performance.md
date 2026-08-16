@@ -12,6 +12,26 @@ certification. The only local throughput gate is at least 1.5x for four workers
 versus one worker on an eight-chunk workload and a four-core-or-larger
 controlled host.
 
+## v0.2 local reference
+
+A pre-release reference run on an Apple M3 used CPython 3.13.14, NumPy 2.5.1,
+Go 1.26.5, PN14QP439, one 1,024-value chunk, five warm-up iterations, and 30
+timed repetitions. It measured the public Python API against the same process's
+C ABI path:
+
+| Operation | C ABI median | Python median | Python/C ABI ratio |
+| --- | ---: | ---: | ---: |
+| Add | 0.153 ms | 0.167 ms | 1.089x |
+| Multiply | 26.574 ms | 26.557 ms | 0.999x |
+| Rotate | 14.933 ms | 14.953 ms | 1.001x |
+
+On the same host, eight-chunk complex encryption processed approximately 2.27
+million values per second with one worker and 7.15 million with four workers, a
+3.16x throughput ratio. These measurements demonstrate low wrapper overhead
+and useful chunk-level parallelism on that host; they are not predictions for
+other hardware or workloads. The attached release reports are the authoritative
+record for each certified release commit.
+
 Local benchmark JSON is intentionally ignored by Git. Generate disposable
 development measurements with:
 

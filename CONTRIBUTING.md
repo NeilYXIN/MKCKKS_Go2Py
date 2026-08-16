@@ -1,6 +1,6 @@
 # Contributing
 
-Install `uv` and a tested Go toolchain, then:
+Install Python 3.13, `uv`, and Go 1.26.5, then:
 
 ```console
 uv sync --all-groups
@@ -10,8 +10,7 @@ bash scripts/check.sh
 `scripts/check.sh` runs the core source checks shared with CI, in the order that
 fails fastest, and reports every failing stage rather than stopping at the
 first. CI invokes the same stages directly. CI additionally executes the
-notebook and distributed example, enables Python coverage reporting, and builds
-and smoke-tests platform wheels.
+notebook and distributed example and builds and smoke-tests platform wheels.
 
 While iterating, run only the stages you need:
 

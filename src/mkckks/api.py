@@ -70,6 +70,7 @@ PN15QP880 = {
     "sigma": 3.2,
 }
 
+HARD_MAX_CHUNKS = 64
 HARD_MAX_VALUES = 1 << 26
 HARD_MAX_ARTIFACT_BYTES = 1 << 30
 VALIDATED_COMPONENT_BOUND = float(1 << 20)
@@ -102,7 +103,7 @@ class ResourceLimits:
     def __post_init__(self) -> None:
         """Reject limits that are not positive integers within the hard caps."""
         for name, value, maximum in (
-            ("max_chunks", self.max_chunks, HARD_MAX_VALUES),
+            ("max_chunks", self.max_chunks, HARD_MAX_CHUNKS),
             ("max_values", self.max_values, HARD_MAX_VALUES),
             ("max_artifact_bytes", self.max_artifact_bytes, HARD_MAX_ARTIFACT_BYTES),
         ):
@@ -130,13 +131,16 @@ class Parameters:
     @classmethod
     def preset(cls, name: str) -> Parameters:
         """Return one of the parameter literals exercised by upstream tests."""
+        if not isinstance(name, str):
+            raise InvalidParameterError("preset name must be a string")
+        normalized = name.upper()
         try:
-            value = cls._PRESETS[name.upper()]
+            value = cls._PRESETS[normalized]
         except KeyError as exc:
             raise InvalidParameterError(
                 f"unknown preset {name!r}; choose PN14QP439 or PN15QP880"
             ) from exc
-        return replace(cls.from_literal(**value), _preset_name=name.upper())
+        return replace(cls.from_literal(**value), _preset_name=normalized)
 
     @classmethod
     def from_literal(
@@ -938,8 +942,10 @@ class Party(_NativeObject):
     def partial_decrypt(self, ciphertext: Ciphertext) -> DecryptionShare:
         """Produce this party's decryption share for ``ciphertext``.
 
-        The share reveals nothing on its own; it is combined with the shares of
-        every other participant by :meth:`Context.collective_decrypt`.
+        The share is sensitive, unauthenticated protocol material intended for
+        an authenticated combiner. It is combined with every other participant's
+        share by :meth:`Context.collective_decrypt`; the wrapper makes no
+        standalone confidentiality claim for an individual share.
 
         Raises:
             MissingShareError: This party is not among the ciphertext's
@@ -1391,7 +1397,8 @@ class DecryptionShare(_NativeObject):
 
     Produced by :meth:`Party.partial_decrypt`. A share is bound to the exact
     ciphertext it was derived from via :attr:`artifact_id`, so it cannot be
-    replayed against a different one. Shares reveal nothing individually.
+    replayed against a different one. Shares remain sensitive, unauthenticated
+    protocol material and must be transported over an authenticated channel.
     """
 
     def __init__(self, handle: int, context: Context, party_id: str, artifact_id: str) -> None:

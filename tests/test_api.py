@@ -99,7 +99,7 @@ def test_ciphertext_multiplication_rotation_and_conjugation(context: mkckks.Cont
 def test_validation_and_share_binding(context: mkckks.Context) -> None:
     with pytest.raises(mkckks.InvalidDTypeError):
         context.encode(np.array([1, 2], dtype=np.int64))
-    with pytest.raises(ValueError):
+    with pytest.raises(mkckks.InvalidParameterError):
         context.encode(np.array([np.nan]))
     alice = mkckks.Party.generate(context, "alice-binding")
     first, second = alice.encrypt([1.0]), alice.encrypt([2.0])
@@ -181,9 +181,31 @@ def test_versioned_serialization_round_trip(context: mkckks.Context) -> None:
         local(restored_ciphertext),
     )
 
+    # Context replicas may exchange artifacts for the same public key. The
+    # bridge must preserve that identity while rejecting a fresh, same-name key.
+    restored_public = mkckks.PublicKey.from_bytes(restored_context, alice.public_key.to_bytes())
+    cross_context = mkckks.Evaluator(context).add(
+        ciphertext, restored_public.encrypt(np.ones_like(values))
+    )
+    cross_share = alice.partial_decrypt(cross_context)
+    assert_precision(
+        context.collective_decrypt(cross_context, [cross_share]),
+        values + 1,
+        addition(cross_context, local(ciphertext), local(context.parameters)),
+    )
+
+    other_replica = mkckks.Context.from_bytes(context_bytes)
+    impostor = mkckks.Party.generate(other_replica, "alice-serialize")
+    with pytest.raises(mkckks.MissingKeyError, match="different public keys") as collision:
+        mkckks.Evaluator(context).add(ciphertext, impostor.encrypt(values))
+    assert isinstance(collision.value, mkckks.MKCKKSError)
+    with pytest.raises(mkckks.MissingShareError, match="different public key") as wrong_share:
+        impostor.partial_decrypt(ciphertext)
+    assert isinstance(wrong_share.value, mkckks.MKCKKSError)
+
 
 def test_parameter_validation() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(mkckks.InvalidParameterError):
         mkckks.Parameters.from_literal(
             log_n=14, log_slots=14, q=[17], p=[19, 23], scale=2.0, sigma=3.2
         )
