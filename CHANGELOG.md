@@ -101,6 +101,9 @@ No changes yet.
 
 ### Fixed
 
+- Draft prereleases now materialize and verify `v$VERSION` at the certified
+  commit before uploading assets. This handles GitHub drafts that retain a
+  target commit without creating the tag reference until publication.
 - Bridge validation failures now carry explicit status codes, so a
   non-participant `partial_decrypt` raises `MissingShareError` rather than
   `ContextMismatchError`, and a multiply shape mismatch is no longer reported as

@@ -49,6 +49,8 @@ a CycloneDX SBOM of the runtime dependency closure, and compatibility-bundle
 generation, then creates a draft GitHub prerelease. It refuses to start if the
 target version tag resolves to another commit, and creating and uploading the
 draft are separately idempotent, so a re-dispatch completes a partial upload.
+Before uploading, it explicitly materializes the version tag at the certified
+commit because GitHub can otherwise leave an unpublished draft untagged.
 Once a release is published, re-dispatch refuses to replace any attached asset.
 The first job resolves the selected target to one commit SHA; every platform
 artifact and the release tag use that same immutable commit. The workflow never

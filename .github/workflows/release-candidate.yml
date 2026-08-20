@@ -312,6 +312,7 @@ jobs:
         # A re-dispatch may finish a partial draft upload, but evidence attached
         # to an already-published release is immutable.
         run: |
+          release_exists=false
           if release_json="$(gh release view "$TAG" --repo "$REPO" \
             --json isDraft,isPrerelease 2>/dev/null)"; then
             if [ "$(jq -r .isDraft <<<"$release_json")" != "true" ]; then
@@ -322,22 +323,27 @@ jobs:
               echo "::error::Existing draft $TAG is not the expected prerelease."
               exit 1
             fi
-            echo "::notice::Resuming uploads to existing draft prerelease $TAG."
-            gh release edit "$TAG" \
-              --repo "$REPO" \
-              --title "MKCKKS Go2Py $TAG" \
-              --notes-file docs/release-notes-0.2.0.md
-          else
-            gh release create "$TAG" \
-              --repo "$REPO" \
-              --target "$TARGET" \
-              --title "MKCKKS Go2Py $TAG" \
-              --notes-file docs/release-notes-0.2.0.md \
-              --draft --prerelease
+            release_exists=true
           fi
-          # Re-resolve after the hours-long certification and any draft creation,
-          # closing the gap in which an existing tag could have moved since the
-          # verification job's initial check.
+
+          # GitHub can retain target_commitish on an unpublished draft without
+          # materializing refs/tags/$TAG. Create the lightweight tag explicitly
+          # so the certified target is immutable and independently verifiable.
+          tag_ref_error="$RUNNER_TEMP/draft-tag-ref-error"
+          if ! gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>"$tag_ref_error"; then
+            if ! grep -q '(HTTP 404)' "$tag_ref_error"; then
+              cat "$tag_ref_error" >&2
+              echo "::error::Unable to check release tag $TAG before creating the draft."
+              exit 1
+            fi
+            if ! gh api --method POST "repos/$REPO/git/refs" \
+              -f ref="refs/tags/$TAG" -f sha="$TARGET" --silent; then
+              echo "::error::Unable to create release tag $TAG at $TARGET."
+              exit 1
+            fi
+            echo "::notice::Created release tag $TAG at certified commit $TARGET."
+          fi
+
           if ! tagged_commit="$(gh api "repos/$REPO/commits/$TAG" --jq .sha)"; then
             echo "::error::Unable to resolve release tag $TAG before uploading assets."
             exit 1
@@ -345,6 +351,22 @@ jobs:
           if [ "$tagged_commit" != "$TARGET" ]; then
             echo "::error::Release tag $TAG resolves to $tagged_commit, not certified commit $TARGET."
             exit 1
+          fi
+
+          if [ "$release_exists" = true ]; then
+            echo "::notice::Resuming uploads to existing draft prerelease $TAG."
+            gh release edit "$TAG" \
+              --repo "$REPO" \
+              --target "$TARGET" \
+              --title "MKCKKS Go2Py $TAG" \
+              --notes-file docs/release-notes-0.2.0.md
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --verify-tag \
+              --title "MKCKKS Go2Py $TAG" \
+              --notes-file docs/release-notes-0.2.0.md \
+              --draft --prerelease
           fi
           # --clobber is safe here because the state check above proves the
           # release is still a draft owned by this version tag.
